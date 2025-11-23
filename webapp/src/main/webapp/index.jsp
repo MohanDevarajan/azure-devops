@@ -1,3 +1,28 @@
-<h1> RahulShettyAcademy.com Learning</h1>
-<h2> Learn QA Automation tools + Devops Tools CI/CD pipelines in course from Scratch</h2>
-<h2> Good Luck and we are almost done with the course.Thankyou</h2>
+<%@ page contentType="text/html; charset=UTF-8" pageEncoding="UTF-8" %>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Azure Project Success</title>
+  <style>
+    body {
+      background-color: #f0f4f8;
+      font-family: Arial, sans-serif;
+      text-align: center;
+      padding-top: 100px;
+    }
+    h1 {
+      color: #2c3e50;
+      font-size: 36px;
+    }
+    p {
+      color: #34495e;
+      font-size: 20px;
+    }
+  </style>
+</head>
+<body>
+  <h1>🎉 Congratulations!</h1>
+  <p><%= "Mohan has successfully completed the Azure project." %></p>
+</body>
+</html>
