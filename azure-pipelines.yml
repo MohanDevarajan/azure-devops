@@ -64,35 +64,19 @@ stages:
         WAR_FILE=$(find $(Pipeline.Workspace)/warfiles -name "*.war" | head -n 1)
         echo "WAR found: $WAR_FILE"
 
-        echo "=== Creating TAR ==="
-        rm -rf tarbuild
-        mkdir tarbuild
-        cp "$WAR_FILE" tarbuild/ROOT.war
-        tar -cvf deploy.tar -C tarbuild ROOT.war
+        echo "=== Encoding WAR to base64 ==="
+        base64 "$WAR_FILE" > war.b64
 
-        echo "=== Preparing directory inside container ==="
-        az container exec \
+        echo "=== Uploading WAR into QA container ==="
+        cat war.b64 | az container exec \
           --resource-group ProjectX-RG \
           --name projectx-qa \
-          --exec-command "mkdir -p /tmp/deploy"
-
-        echo "=== Uploading TAR to container ==="
-        cat deploy.tar | az container exec \
-          --resource-group ProjectX-RG \
-          --name projectx-qa \
-          --exec-command "tar -xvf - -C /tmp/deploy"
-
-        echo "=== Moving WAR to Tomcat webapps ==="
-        az container exec \
-          --resource-group ProjectX-RG \
-          --name projectx-qa \
-          --exec-command "mv /tmp/deploy/ROOT.war /usr/local/tomcat/webapps/ROOT.war"
+          --exec-command "base64 -d > /usr/local/tomcat/webapps/ROOT.war"
 
         echo "=== Restarting QA container ==="
         az container restart \
           --resource-group ProjectX-RG \
           --name projectx-qa
-
       displayName: "Deploy WAR to QA"
 
 
@@ -116,33 +100,17 @@ stages:
         WAR_FILE=$(find $(Pipeline.Workspace)/warfiles -name "*.war" | head -n 1)
         echo "WAR found: $WAR_FILE"
 
-        echo "=== Creating TAR ==="
-        rm -rf tarbuild
-        mkdir tarbuild
-        cp "$WAR_FILE" tarbuild/ROOT.war
-        tar -cvf deploy.tar -C tarbuild ROOT.war
+        echo "=== Encoding WAR to base64 ==="
+        base64 "$WAR_FILE" > war.b64
 
-        echo "=== Preparing directory inside PROD container ==="
-        az container exec \
+        echo "=== Uploading WAR into PROD container ==="
+        cat war.b64 | az container exec \
           --resource-group ProjectX-RG \
           --name projectx-prod \
-          --exec-command "mkdir -p /tmp/deploy"
-
-        echo "=== Uploading TAR to PROD container ==="
-        cat deploy.tar | az container exec \
-          --resource-group ProjectX-RG \
-          --name projectx-prod \
-          --exec-command "tar -xvf - -C /tmp/deploy"
-
-        echo "=== Moving WAR into Tomcat ==="
-        az container exec \
-          --resource-group ProjectX-RG \
-          --name projectx-prod \
-          --exec-command "mv /tmp/deploy/ROOT.war /usr/local/tomcat/webapps/ROOT.war"
+          --exec-command "base64 -d > /usr/local/tomcat/webapps/ROOT.war"
 
         echo "=== Restarting PROD container ==="
         az container restart \
           --resource-group ProjectX-RG \
           --name projectx-prod
-
       displayName: "Deploy WAR to PROD"
