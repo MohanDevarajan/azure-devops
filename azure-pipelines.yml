@@ -4,13 +4,18 @@ trigger:
 pool:
   name: SelfHostedPool
 
+variables:
+  WAR_NAME: 'webapp.war'
+
 stages:
-# -----------------------------
-# 1. BUILD STAGE
-# -----------------------------
+
+# ---------------------- #
+#        BUILD STAGE     #
+# ---------------------- #
 - stage: Build
+  displayName: "Build Java WAR"
   jobs:
-  - job: MavenBuild
+  - job: BuildJob
     steps:
     - task: Maven@3
       inputs:
@@ -35,76 +40,74 @@ stages:
         publishLocation: 'Container'
 
 
-# -----------------------------
-# 2. QA DEPLOY
-# -----------------------------
+# ---------------------- #
+#      QA DEPLOY STAGE   #
+# ---------------------- #
 - stage: Deploy_QA
-  displayName: "Deploy to QA"
+  displayName: "Deploy to QA Container"
   dependsOn: Build
   jobs:
-  - job: QADeployJob
-    steps:
+  - deployment: DeployQA
+    displayName: "QA Deployment"
+    environment: "projectx-qa"
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - download: current
+            artifact: warfiles
 
-    - download: current
-      artifact: warfiles
+          - script: |
+              echo "Encoding WAR as base64"
+              base64 warfiles/$(WAR_NAME) > war.b64
 
-    - task: InstallSSHKey@0
-      inputs:
-        knownHostsEntry: '$(QA_HOST)'
-        sshKeySecureFile: 'id_rsa'
+              echo "Creating temp directory in container"
+              az container exec --resource-group ProjectX-RG --name projectx-qa --exec-command "mkdir -p /tmp/deploy"
 
-    - task: Bash@3
-      displayName: "Copy WAR to QA container"
-      inputs:
-        targetType: inline
-        script: |
-          scp warfiles/*.war $(SSH_USER)@$(QA_HOST):/usr/local/tomcat/webapps/
+              echo "Copy WAR into QA container"
+              az container exec --resource-group ProjectX-RG --name projectx-qa --exec-command "sh -c 'base64 -d > /tmp/deploy/ROOT.war'" < war.b64
 
-    - task: Bash@3
-      displayName: "Restart Tomcat in QA"
-      inputs:
-        targetType: inline
-        script: |
-          ssh $(SSH_USER)@$(QA_HOST) "pkill java; /usr/local/tomcat/bin/startup.sh"
+              echo "Move WAR into Tomcat webapps/"
+              az container exec --resource-group ProjectX-RG --name projectx-qa --exec-command "mv /tmp/deploy/ROOT.war /usr/local/tomcat/webapps/ROOT.war"
 
+              echo "Restart QA container"
+              az container restart --resource-group ProjectX-RG --name projectx-qa
 
-# -----------------------------
-# 3. MANUAL APPROVAL BEFORE PROD
-# -----------------------------
-- stage: Approval
-  dependsOn: Deploy_QA
-  displayName: "Manual Approval Before Production"
-  approval: true
+            displayName: "Deploy WAR to QA"
 
 
-# -----------------------------
-# 4. PROD DEPLOY
-# -----------------------------
+# ---------------------- #
+#   PROD DEPLOY STAGE    #
+#   (Manual Approval)    #
+# ---------------------- #
 - stage: Deploy_Prod
-  displayName: "Deploy to Production"
-  dependsOn: Approval
+  displayName: "Deploy to PROD Container"
+  dependsOn: Deploy_QA
   jobs:
-  - job: ProdDeployJob
-    steps:
+  - deployment: DeployProd
+    displayName: "Production Deployment"
+    environment: "projectx-prod"   # <-- this is where approval is triggered!
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - download: current
+            artifact: warfiles
 
-    - download: current
-      artifact: warfiles
+          - script: |
+              echo "Encoding WAR as base64"
+              base64 warfiles/$(WAR_NAME) > war.b64
 
-    - task: InstallSSHKey@0
-      inputs:
-        knownHostsEntry: '$(PROD_HOST)'
-        sshKeySecureFile: 'id_rsa'
+              echo "Creating temp directory in PROD container"
+              az container exec --resource-group ProjectX-RG --name projectx-prod --exec-command "mkdir -p /tmp/deploy"
 
-    - task: Bash@3
-      displayName: "Copy WAR to Prod container"
-      inputs:
-        targetType: inline
-        script: |
-          scp warfiles/*.war $(SSH_USER)@$(PROD_HOST):/usr/local/tomcat/webapps/
+              echo "Copy WAR into PROD container"
+              az container exec --resource-group ProjectX-RG --name projectx-prod --exec-command "sh -c 'base64 -d > /tmp/deploy/ROOT.war'" < war.b64
 
-    - task: Bash@3
-      displayName: "Restart Tomcat in Prod"
-      inputs:
-        targetType: inline
-        script: |
-          ssh $(SSH_USER)@$(PROD_HOST) "pkill java; /usr/local/tomcat/bin/startup.sh"
+              echo "Move WAR into Tomcat webapps/"
+              az container exec --resource-group ProjectX-RG --name projectx-prod --exec-command "mv /tmp/deploy/ROOT.war /usr/local/tomcat/webapps/ROOT.war"
+
+              echo "Restart PROD container"
+              az container restart --resource-group ProjectX-RG --name projectx-prod
+
+            displayName: "Deploy WAR to PROD"
