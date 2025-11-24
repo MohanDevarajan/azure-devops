@@ -71,7 +71,7 @@ stages:
         cat war.b64 | az container exec \
           --resource-group ProjectX-RG \
           --name projectx-qa \
-          --exec-command "base64 -d > /usr/local/tomcat/webapps/ROOT.war"
+          --exec-command "/bin/sh -c 'base64 -d > /usr/local/tomcat/webapps/ROOT.war'"
 
         echo "=== Restarting QA container ==="
         az container restart \
@@ -107,7 +107,7 @@ stages:
         cat war.b64 | az container exec \
           --resource-group ProjectX-RG \
           --name projectx-prod \
-          --exec-command "base64 -d > /usr/local/tomcat/webapps/ROOT.war"
+          --exec-command "/bin/sh -c 'base64 -d > /usr/local/tomcat/webapps/ROOT.war'"
 
         echo "=== Restarting PROD container ==="
         az container restart \
