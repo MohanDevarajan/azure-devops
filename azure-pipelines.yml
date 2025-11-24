@@ -2,16 +2,15 @@ trigger:
   - main
 
 pool:
-  name: SelfHostedPool   # your private agent pool
+  name: SelfHostedPool
 
 variables:
-  javaVersion: '17'
   artifactName: 'warfiles'
 
 stages:
 
 # ================================================================
-#  BUILD STAGE
+#  BUILD
 # ================================================================
 - stage: Build
   displayName: Build Java Project
@@ -25,7 +24,6 @@ stages:
           inputs:
             mavenPomFile: 'pom.xml'
             goals: 'clean package'
-            publishJUnitResults: false
 
         - task: CopyFiles@2
           displayName: Copy WAR to artifact folder
@@ -35,30 +33,27 @@ stages:
             TargetFolder: '$(Build.ArtifactStagingDirectory)/$(artifactName)'
 
         - task: PublishBuildArtifacts@1
-          displayName: Publish WAR Artifact
           inputs:
             PathtoPublish: '$(Build.ArtifactStagingDirectory)/$(artifactName)'
             ArtifactName: '$(artifactName)'
 
 
 # ================================================================
-#  QA DEPLOY STAGE
+#  QA DEPLOY
 # ================================================================
 - stage: QA
   displayName: Deploy to QA
   dependsOn: Build
 
-  # This requires approval in Azure DevOps -> Environments
-  environment: ProjectX-QA
-
   jobs:
     - deployment: DeployToQA
-      displayName: Deploy WAR into QA Container
-      environment: ProjectX-QA
+      displayName: Deploy WAR to QA
+      environment: ProjectX-QA      # ✔ VALID HERE
       strategy:
         runOnce:
           deploy:
             steps:
+
               - download: current
                 artifact: warfiles
 
@@ -68,13 +63,7 @@ stages:
                   script: |
                     echo "=== Locating WAR file ==="
                     WAR_PATH=$(find "$(Pipeline.Workspace)/warfiles" -name "*.war" | head -n 1)
-
-                    if [ -z "$WAR_PATH" ]; then
-                      echo "ERROR: WAR file not found!"
-                      exit 1
-                    fi
-
-                    echo "WAR found at: $WAR_PATH"
+                    echo "Found WAR: $WAR_PATH"
 
                     AGENT_IP=$(hostname -I | awk '{print $1}')
                     echo "Agent IP: $AGENT_IP"
@@ -85,7 +74,7 @@ stages:
                     HTTP_PID=$!
                     sleep 3
 
-                    echo "=== Downloading WAR inside QA container using curl ==="
+                    echo "=== Downloading WAR inside container ==="
                     az container exec \
                       --resource-group ProjectX-RG \
                       --name projectx-qa \
@@ -99,26 +88,23 @@ stages:
                       --resource-group ProjectX-RG \
                       --name projectx-qa
 
-                    echo "=== QA Deployment Completed Successfully ==="
-
 
 # ================================================================
-#  PROD DEPLOY STAGE
+#  PROD DEPLOY
 # ================================================================
 - stage: PROD
   displayName: Deploy to PROD
   dependsOn: QA
 
-  environment: ProjectX-PROD
-
   jobs:
     - deployment: DeployToProd
-      displayName: Deploy WAR into PROD Container
-      environment: ProjectX-PROD
+      displayName: Deploy WAR to PROD
+      environment: ProjectX-PROD       # ✔ VALID HERE
       strategy:
         runOnce:
           deploy:
             steps:
+
               - download: current
                 artifact: warfiles
 
@@ -128,13 +114,7 @@ stages:
                   script: |
                     echo "=== Locating WAR file ==="
                     WAR_PATH=$(find "$(Pipeline.Workspace)/warfiles" -name "*.war" | head -n 1)
-
-                    if [ -z "$WAR_PATH" ]; then
-                      echo "ERROR: WAR file not found!"
-                      exit 1
-                    fi
-
-                    echo "WAR found at: $WAR_PATH"
+                    echo "Found WAR: $WAR_PATH"
 
                     AGENT_IP=$(hostname -I | awk '{print $1}')
                     echo "Agent IP: $AGENT_IP"
@@ -145,7 +125,7 @@ stages:
                     HTTP_PID=$!
                     sleep 3
 
-                    echo "=== Downloading WAR inside PROD container using curl ==="
+                    echo "=== Downloading WAR inside container ==="
                     az container exec \
                       --resource-group ProjectX-RG \
                       --name projectx-prod \
@@ -158,5 +138,3 @@ stages:
                     az container restart \
                       --resource-group ProjectX-RG \
                       --name projectx-prod
-
-                    echo "=== PROD Deployment Completed Successfully ==="
