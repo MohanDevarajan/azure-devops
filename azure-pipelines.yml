@@ -5,7 +5,11 @@ pool:
   name: SelfHostedPool
 
 variables:
-  WAR_NAME: "webapp.war"
+  IMAGE_NAME: "projectx-webapp"
+  ACR_NAME: "mohanxacr"
+  RESOURCE_GROUP: "ProjectX-RG"
+  QA_CONTAINER: "projectx-qa"
+  PROD_CONTAINER: "projectx-prod"
 
 stages:
 
@@ -16,21 +20,15 @@ stages:
   displayName: "Build WAR"
   jobs:
   - job: BuildJob
-    displayName: "Compile and Package"
     steps:
-
-    # Build using the JDK already installed on your self-hosted agent
     - task: Maven@3
       displayName: "Build WAR using Maven"
       inputs:
         mavenPomFile: "pom.xml"
         goals: "clean package"
-        publishJUnitResults: true
-        testResultsFiles: "**/surefire-reports/TEST-*.xml"
         javaHomeOption: "Path"
         jdkDirectory: "/usr/lib/jvm/java-17-openjdk-amd64"
 
-    # Copy WAR to artifact staging
     - task: CopyFiles@2
       displayName: "Copy WAR to staging"
       inputs:
@@ -44,41 +42,55 @@ stages:
         ArtifactName: "warfiles"
         publishLocation: "Container"
 
+# ================================================================
+#                      DOCKER BUILD & PUSH
+# ================================================================
+- stage: Docker
+  displayName: "Build & Push Docker Image"
+  dependsOn: Build
+  jobs:
+  - job: DockerJob
+    steps:
+    - download: current
+      artifact: warfiles
+
+    - script: |
+        echo "=== Preparing Dockerfile and WAR ==="
+        cp $(Pipeline.Workspace)/warfiles/webapp.war .
+        cat > Dockerfile <<EOF
+        FROM tomcat:9.0
+        COPY webapp.war /usr/local/tomcat/webapps/ROOT.war
+        EOF
+
+        echo "=== Building Docker image ==="
+        docker build -t $(ACR_NAME).azurecr.io/$(IMAGE_NAME):$(Build.BuildId) .
+
+        echo "=== Logging into ACR ==="
+        az acr login --name $(ACR_NAME)
+
+        echo "=== Pushing image to ACR ==="
+        docker push $(ACR_NAME).azurecr.io/$(IMAGE_NAME):$(Build.BuildId)
+      displayName: "Build & Push Docker Image"
 
 # ================================================================
 #                      QA DEPLOYMENT STAGE
 # ================================================================
 - stage: Deploy_QA
   displayName: "Deploy to QA"
-  dependsOn: Build
+  dependsOn: Docker
   jobs:
   - job: QADeploy
-    displayName: "Deployment to QA ACI"
     steps:
-
-    - download: current
-      artifact: warfiles
-
     - script: |
-        echo "=== Locating WAR file ==="
-        WAR_FILE=$(find $(Pipeline.Workspace)/warfiles -name "*.war" | head -n 1)
-        echo "WAR found: $WAR_FILE"
-
-        echo "=== Encoding WAR to base64 ==="
-        base64 "$WAR_FILE" > war.b64
-
-        echo "=== Uploading WAR into QA container ==="
-        cat war.b64 | az container exec \
-          --resource-group ProjectX-RG \
-          --name projectx-qa \
-          --exec-command "/bin/sh -c 'base64 -d > /usr/local/tomcat/webapps/ROOT.war'"
-
-        echo "=== Restarting QA container ==="
-        az container restart \
-          --resource-group ProjectX-RG \
-          --name projectx-qa
-      displayName: "Deploy WAR to QA"
-
+        echo "=== Deploying to QA ==="
+        az container create \
+          --resource-group $(RESOURCE_GROUP) \
+          --name $(QA_CONTAINER) \
+          --image $(ACR_NAME).azurecr.io/$(IMAGE_NAME):$(Build.BuildId) \
+          --registry-login-server $(ACR_NAME).azurecr.io \
+          --restart-policy Always \
+          --ports 8080
+      displayName: "Deploy to QA ACI"
 
 # ================================================================
 #                      PROD DEPLOYMENT STAGE
@@ -86,31 +98,16 @@ stages:
 - stage: Deploy_Prod
   displayName: "Deploy to PROD"
   dependsOn: Deploy_QA
-  # (If you want manual approval, add environment in UI)
   jobs:
   - job: ProdDeploy
-    displayName: "Deployment to PROD ACI"
     steps:
-
-    - download: current
-      artifact: warfiles
-
     - script: |
-        echo "=== Locating WAR file ==="
-        WAR_FILE=$(find $(Pipeline.Workspace)/warfiles -name "*.war" | head -n 1)
-        echo "WAR found: $WAR_FILE"
-
-        echo "=== Encoding WAR to base64 ==="
-        base64 "$WAR_FILE" > war.b64
-
-        echo "=== Uploading WAR into PROD container ==="
-        cat war.b64 | az container exec \
-          --resource-group ProjectX-RG \
-          --name projectx-prod \
-          --exec-command "/bin/sh -c 'base64 -d > /usr/local/tomcat/webapps/ROOT.war'"
-
-        echo "=== Restarting PROD container ==="
-        az container restart \
-          --resource-group ProjectX-RG \
-          --name projectx-prod
-      displayName: "Deploy WAR to PROD"
+        echo "=== Deploying to PROD ==="
+        az container create \
+          --resource-group $(RESOURCE_GROUP) \
+          --name $(PROD_CONTAINER) \
+          --image $(ACR_NAME).azurecr.io/$(IMAGE_NAME):$(Build.BuildId) \
+          --registry-login-server $(ACR_NAME).azurecr.io \
+          --restart-policy Always \
+          --ports 8080
+      displayName: "Deploy to PROD ACI"
