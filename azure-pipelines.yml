@@ -1,31 +1,92 @@
-# Maven
-# Build your Java project and run tests with Apache Maven.
-# Add steps that analyze code, save build artifacts, deploy, and more:
-# https://docs.microsoft.com/azure/devops/pipelines/languages/java
-
 trigger:
 - main
 
 pool:
   name: SelfHostedPool
 
-steps:
-- task: Maven@3
-  inputs:
-    mavenPomFile: 'pom.xml'
-    mavenOptions: '-Xmx3072m'
-    javaHomeOption: 'JDKVersion'
-    jdkVersionOption: '1.11'
-    jdkArchitectureOption: 'x64'
-    publishJUnitResults: true
-    testResultsFiles: '**/surefire-reports/TEST-*.xml'
-    goals: 'package'
-- task: CopyFiles@2
-  inputs:
-    Contents: '**/*.war'
-    TargetFolder: '$(build.artifactstagingdirectory)'
-- task: PublishBuildArtifacts@1
-  inputs:
-    PathtoPublish: '$(Build.ArtifactStagingDirectory)'
-    ArtifactName: 'warfiles'
-    publishLocation: 'Container'
+stages:
+
+# ---------------------- #
+#        BUILD STAGE     #
+# ---------------------- #
+- stage: Build
+  displayName: "Build Java WAR"
+  jobs:
+  - job: BuildJob
+    steps:
+    - task: Maven@3
+      inputs:
+        mavenPomFile: 'pom.xml'
+        mavenOptions: '-Xmx3072m'
+        javaHomeOption: 'JDKVersion'
+        jdkVersionOption: '1.11'
+        jdkArchitectureOption: 'x64'
+        publishJUnitResults: true
+        testResultsFiles: '**/surefire-reports/TEST-*.xml'
+        goals: 'package'
+
+    - task: CopyFiles@2
+      inputs:
+        Contents: '**/*.war'
+        TargetFolder: '$(Build.ArtifactStagingDirectory)'
+
+    - task: PublishBuildArtifacts@1
+      inputs:
+        PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+        ArtifactName: 'warfiles'
+        publishLocation: 'Container'
+
+
+# ---------------------- #
+#      QA DEPLOY STAGE   #
+# ---------------------- #
+- stage: Deploy_QA
+  displayName: "Deploy to QA Container"
+  dependsOn: Build
+  jobs:
+  - deployment: DeployQA
+    displayName: "QA Deployment"
+    environment: "projectx-qa"   # Uses Azure DevOps environment
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+
+          - download: current
+            artifact: warfiles
+
+          - script: |
+              echo "Deploying WAR to QA container instance..."
+              az container exec \
+                --resource-group ProjectX-RG \
+                --name projectx-qa \
+                --exec-command "rm -rf /usr/local/tomcat/webapps/ROOT && cp /mnt/warfiles/*.war /usr/local/tomcat/webapps/ROOT.war"
+            displayName: "Copy WAR into QA Tomcat container"
+
+
+# ---------------------- #
+#   PROD DEPLOY STAGE    #
+#   (Manual Approval)    #
+# ---------------------- #
+- stage: Deploy_Prod
+  displayName: "Deploy to PROD Container"
+  dependsOn: Deploy_QA
+  environment: "projectx-prod"   # manual approval happens here
+  jobs:
+  - deployment: DeployProd
+    displayName: "Production Deployment"
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+
+          - download: current
+            artifact: warfiles
+
+          - script: |
+              echo "Deploying WAR to PROD container instance..."
+              az container exec \
+                --resource-group ProjectX-RG \
+                --name projectx-prod \
+                --exec-command "rm -rf /usr/local/tomcat/webapps/ROOT && cp /mnt/warfiles/*.war /usr/local/tomcat/webapps/ROOT.war"
+            displayName: "Copy WAR into PROD Tomcat container"
