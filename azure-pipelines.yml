@@ -1,130 +1,147 @@
 trigger:
-  - master
+- main
 
 pool:
   name: SelfHostedPool
 
 variables:
-  maven.opts: "-Dmaven.repo.local=$(Pipeline.Workspace)/.m2"
+  WAR_NAME: 'webapp.war'
 
 stages:
-# ==========================
-#        BUILD STAGE
-# ==========================
-- stage: Build
-  displayName: "Build and Package"
 
+# ============================
+#       BUILD STAGE
+# ============================
+- stage: Build
+  displayName: "Build Java WAR"
   jobs:
   - job: BuildJob
     steps:
     - task: Maven@3
       inputs:
-        mavenPomFile: 'webapp/pom.xml'
-        goals: 'clean package'
-        options: '$(maven.opts)'
-      displayName: "Build Maven Project"
+        mavenPomFile: 'pom.xml'
+        mavenOptions: '-Xmx3072m'
+        javaHomeOption: 'JDKVersion'
+        jdkVersionOption: '1.11'
+        jdkArchitectureOption: 'x64'
+        publishJUnitResults: true
+        testResultsFiles: '**/surefire-reports/TEST-*.xml'
+        goals: 'package'
 
-    - task: PublishPipelineArtifact@1
+    - task: CopyFiles@2
       inputs:
-        targetPath: 'webapp/target'
-        artifact: 'warfiles'
-      displayName: "Publish WAR Artifact"
+        Contents: '**/*.war'
+        TargetFolder: '$(Build.ArtifactStagingDirectory)'
 
-# ===========================
-#        QA STAGE
-# ===========================
-- stage: QA
-  displayName: "Deploy to QA"
+    - task: PublishBuildArtifacts@1
+      inputs:
+        PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+        ArtifactName: 'warfiles'
+        publishLocation: 'Container'
+
+
+# ============================
+#       DEPLOY TO QA
+# ============================
+- stage: Deploy_QA
+  displayName: "Deploy to QA Container"
   dependsOn: Build
-
   jobs:
-  - job: DeployQA
-    steps:
+  - deployment: DeployQA
+    environment: "projectx-qa"
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - download: current
+            artifact: warfiles
 
-    - download: current
-      artifact: warfiles
+          - script: |
+              echo "=== Locating WAR file ==="
+              WAR_PATH=$(find "$(Pipeline.Workspace)/warfiles" -name "*.war" | head -n 1)
 
-    - script: |
-        echo "Locating WAR file..."
-        WAR_PATH=$(find "$(Pipeline.Workspace)/warfiles" -name "*.war" | head -n 1)
+              if [ -z "$WAR_PATH" ]; then
+                echo "WAR not found!"
+                exit 1
+              fi
 
-        if [ -z "$WAR_PATH" ]; then
-          echo "WAR NOT FOUND"
-          exit 1
-        fi
+              echo "WAR found at: $WAR_PATH"
 
-        echo "WAR located at: $WAR_PATH"
-        echo "Deploying using Dockerized Azure CLI..."
+              AGENT_IP=$(hostname -I | awk '{print $1}')
+              echo "Agent IP: $AGENT_IP"
 
-        echo "Ensuring deployment directory exists inside QA container..."
-        docker run --rm \
-          mcr.microsoft.com/azure-cli:latest \
-          az container exec \
-            --resource-group ProjectX-RG \
-            --name projectx-qa \
-            --exec-command "mkdir -p /usr/local/tomcat/webapps"
+              echo "=== Starting temp HTTP server ==="
+              cd "$(dirname "$WAR_PATH")"
+              python3 -m http.server 9000 &
+              SERVER_PID=$!
 
-        echo "Copying WAR into QA container..."
-        docker run --rm \
-          -v "$WAR_PATH":/warfile.war \
-          mcr.microsoft.com/azure-cli:latest \
-          az container cp /warfile.war ProjectX-RG/projectx-qa:/usr/local/tomcat/webapps/ROOT.war
+              sleep 3
 
-        echo "Restarting QA container..."
-        docker run --rm \
-          mcr.microsoft.com/azure-cli:latest \
-          az container restart --resource-group ProjectX-RG --name projectx-qa
+              echo "=== Downloading WAR inside QA container ==="
+              az container exec \
+                --resource-group ProjectX-RG \
+                --name projectx-qa \
+                --exec-command "curl -o /usr/local/tomcat/webapps/ROOT.war http://$AGENT_IP:9000/$(basename $WAR_PATH)"
 
-        echo "QA Deployment done."
-      displayName: "Deploy to QA"
+              echo "=== Stopping HTTP server ==="
+              kill $SERVER_PID
 
-# ===========================
-#       PROD STAGE
-# ===========================
-- stage: PROD
-  displayName: "Deploy to PROD"
-  dependsOn: QA
+              echo "=== Restarting QA container ==="
+              az container restart --resource-group ProjectX-RG --name projectx-qa
 
-  # Require manual approval in Azure DevOps > Environments
-  condition: succeeded()
+              echo "=== QA Deployment Complete ==="
+            displayName: "Deploy to QA via HTTP"
 
+
+# ============================
+#       DEPLOY TO PROD
+#       (with approval)
+# ============================
+- stage: Deploy_Prod
+  displayName: "Deploy to PROD Container"
+  dependsOn: Deploy_QA
   jobs:
-  - job: DeployProd
-    steps:
+  - deployment: DeployProd
+    environment: "projectx-prod"   # Approval handled in Azure DevOps UI
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - download: current
+            artifact: warfiles
 
-    - download: current
-      artifact: warfiles
+          - script: |
+              echo "=== Locating WAR file ==="
+              WAR_PATH=$(find "$(Pipeline.Workspace)/warfiles" -name "*.war" | head -n 1)
 
-    - script: |
-        echo "Locating WAR file..."
-        WAR_PATH=$(find "$(Pipeline.Workspace)/warfiles" -name "*.war" | head -n 1)
+              if [ -z "$WAR_PATH" ]; then
+                echo "WAR not found!"
+                exit 1
+              fi
 
-        if [ -z "$WAR_PATH" ]; then
-          echo "WAR NOT FOUND"
-          exit 1
-        fi
+              echo "WAR found at: $WAR_PATH"
 
-        echo "WAR located at: $WAR_PATH"
-        echo "Deploying using Dockerized Azure CLI..."
+              AGENT_IP=$(hostname -I | awk '{print $1}')
+              echo "Agent IP: $AGENT_IP"
 
-        echo "Ensuring deployment directory exists inside PROD container..."
-        docker run --rm \
-          mcr.microsoft.com/azure-cli:latest \
-          az container exec \
-            --resource-group ProjectX-RG \
-            --name projectx-prod \
-            --exec-command "mkdir -p /usr/local/tomcat/webapps"
+              echo "=== Starting temp HTTP server ==="
+              cd "$(dirname "$WAR_PATH")"
+              python3 -m http.server 9000 &
+              SERVER_PID=$!
 
-        echo "Copying WAR into PROD container..."
-        docker run --rm \
-          -v "$WAR_PATH":/warfile.war \
-          mcr.microsoft.com/azure-cli:latest \
-          az container cp /warfile.war ProjectX-RG/projectx-prod:/usr/local/tomcat/webapps/ROOT.war
+              sleep 3
 
-        echo "Restarting PROD container..."
-        docker run --rm \
-          mcr.microsoft.com/azure-cli:latest \
-          az container restart --resource-group ProjectX-RG --name projectx-prod
+              echo "=== Downloading WAR inside PROD container ==="
+              az container exec \
+                --resource-group ProjectX-RG \
+                --name projectx-prod \
+                --exec-command "curl -o /usr/local/tomcat/webapps/ROOT.war http://$AGENT_IP:9000/$(basename $WAR_PATH)"
 
-        echo "PROD Deployment done."
-      displayName: "Deploy to PROD"
+              echo "=== Stopping HTTP server ==="
+              kill $SERVER_PID
+
+              echo "=== Restarting PROD container ==="
+              az container restart --resource-group ProjectX-RG --name projectx-prod
+
+              echo "=== PROD Deployment Complete ==="
+            displayName: "Deploy to PROD via HTTP"
