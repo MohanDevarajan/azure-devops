@@ -13,19 +13,13 @@ stages:
 #                           BUILD STAGE
 # ================================================================
 - stage: Build
-  displayName: "Build Java WAR"
+  displayName: "Build WAR"
   jobs:
   - job: BuildJob
-    displayName: "Compile & Package"
+    displayName: "Compile and Package"
     steps:
 
-    - task: JavaToolInstaller@0
-      displayName: "Install JDK 17"
-      inputs:
-        versionSpec: "17"
-        jdkArchitectureOption: "x64"
-        jdkSourceOption: "PreInstalled"
-
+    # Build using the JDK already installed on your self-hosted agent
     - task: Maven@3
       displayName: "Build WAR using Maven"
       inputs:
@@ -33,8 +27,10 @@ stages:
         goals: "clean package"
         publishJUnitResults: true
         testResultsFiles: "**/surefire-reports/TEST-*.xml"
+        javaHomeOption: "Path"
+        jdkDirectory: "/usr/lib/jvm/java-17-openjdk-amd64"
 
-    # Copy the WAR to artifact staging
+    # Copy WAR to artifact staging
     - task: CopyFiles@2
       displayName: "Copy WAR to staging"
       inputs:
@@ -48,37 +44,39 @@ stages:
         ArtifactName: "warfiles"
         publishLocation: "Container"
 
+
 # ================================================================
-#                      DEPLOY TO QA STAGE
+#                      QA DEPLOYMENT STAGE
 # ================================================================
 - stage: Deploy_QA
-  displayName: "Deploy to QA Container"
+  displayName: "Deploy to QA"
   dependsOn: Build
   jobs:
   - job: QADeploy
-    displayName: "QA Deployment"
+    displayName: "Deployment to QA ACI"
     steps:
 
     - download: current
       artifact: warfiles
 
     - script: |
-        echo "=== Locating WAR ==="
-        WAR_PATH=$(find $(Pipeline.Workspace)/warfiles -name "*.war" | head -n 1)
-        echo "WAR found: $WAR_PATH"
+        echo "=== Locating WAR file ==="
+        WAR_FILE=$(find $(Pipeline.Workspace)/warfiles -name "*.war" | head -n 1)
+        echo "WAR found: $WAR_FILE"
 
         echo "=== Creating TAR ==="
+        rm -rf tarbuild
         mkdir tarbuild
-        cp "$WAR_PATH" tarbuild/webapp.war
-        tar -cvf deploy.tar -C tarbuild webapp.war
+        cp "$WAR_FILE" tarbuild/ROOT.war
+        tar -cvf deploy.tar -C tarbuild ROOT.war
 
-        echo "=== Creating directory inside container ==="
+        echo "=== Preparing directory inside container ==="
         az container exec \
           --resource-group ProjectX-RG \
           --name projectx-qa \
           --exec-command "mkdir -p /tmp/deploy"
 
-        echo "=== Uploading TAR (stdin) ==="
+        echo "=== Uploading TAR to container ==="
         cat deploy.tar | az container exec \
           --resource-group ProjectX-RG \
           --name projectx-qa \
@@ -88,7 +86,7 @@ stages:
         az container exec \
           --resource-group ProjectX-RG \
           --name projectx-qa \
-          --exec-command "mv /tmp/deploy/webapp.war /usr/local/tomcat/webapps/ROOT.war"
+          --exec-command "mv /tmp/deploy/ROOT.war /usr/local/tomcat/webapps/ROOT.war"
 
         echo "=== Restarting QA container ==="
         az container restart \
@@ -97,47 +95,50 @@ stages:
 
       displayName: "Deploy WAR to QA"
 
+
 # ================================================================
-#                      DEPLOY TO PROD STAGE
+#                      PROD DEPLOYMENT STAGE
 # ================================================================
 - stage: Deploy_Prod
-  displayName: "Deploy to PROD Container"
+  displayName: "Deploy to PROD"
   dependsOn: Deploy_QA
+  # (If you want manual approval, add environment in UI)
   jobs:
   - job: ProdDeploy
-    displayName: "Production Deployment"
+    displayName: "Deployment to PROD ACI"
     steps:
 
     - download: current
       artifact: warfiles
 
     - script: |
-        echo "=== Locating WAR ==="
-        WAR_PATH=$(find $(Pipeline.Workspace)/warfiles -name "*.war" | head -n 1)
-        echo "WAR found: $WAR_PATH"
+        echo "=== Locating WAR file ==="
+        WAR_FILE=$(find $(Pipeline.Workspace)/warfiles -name "*.war" | head -n 1)
+        echo "WAR found: $WAR_FILE"
 
         echo "=== Creating TAR ==="
+        rm -rf tarbuild
         mkdir tarbuild
-        cp "$WAR_PATH" tarbuild/webapp.war
-        tar -cvf deploy.tar -C tarbuild webapp.war
+        cp "$WAR_FILE" tarbuild/ROOT.war
+        tar -cvf deploy.tar -C tarbuild ROOT.war
 
-        echo "=== Creating directory inside container ==="
+        echo "=== Preparing directory inside PROD container ==="
         az container exec \
           --resource-group ProjectX-RG \
           --name projectx-prod \
           --exec-command "mkdir -p /tmp/deploy"
 
-        echo "=== Uploading TAR (stdin) ==="
+        echo "=== Uploading TAR to PROD container ==="
         cat deploy.tar | az container exec \
           --resource-group ProjectX-RG \
           --name projectx-prod \
           --exec-command "tar -xvf - -C /tmp/deploy"
 
-        echo "=== Moving WAR to Tomcat webapps ==="
+        echo "=== Moving WAR into Tomcat ==="
         az container exec \
           --resource-group ProjectX-RG \
           --name projectx-prod \
-          --exec-command "mv /tmp/deploy/webapp.war /usr/local/tomcat/webapps/ROOT.war"
+          --exec-command "mv /tmp/deploy/ROOT.war /usr/local/tomcat/webapps/ROOT.war"
 
         echo "=== Restarting PROD container ==="
         az container restart \
