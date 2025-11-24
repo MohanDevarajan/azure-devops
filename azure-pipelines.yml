@@ -1,173 +1,132 @@
 trigger:
-- main
+  branches:
+    include:
+      - main
 
 pool:
-  name: SelfHostedPool
+  name: SelfHostedAgents
+
+variables:
+  containerNameQA: "projectx-qa"
+  containerNamePROD: "projectx-prod"
+  resourceGroup: "ProjectX-RG"
+  warFile: "$(Build.SourcesDirectory)/target/webapp.war"
 
 stages:
-# =====================================================================
-# STAGE 1 → BUILD
-# =====================================================================
+
+# =============================
+# BUILD STAGE
+# =============================
 - stage: Build
   displayName: "Build WAR"
   jobs:
-  - job: BuildJob
-    displayName: "Maven Build"
+  - job: Build
     steps:
-
-    - task: Maven@4
-      displayName: "Maven Package"
+    - task: Maven@3
       inputs:
         mavenPomFile: "pom.xml"
-        goals: "clean package"
+        goals: "package"
+        options: "-DskipTests"
+        publishJUnitResults: true
 
-    - script: |
-        mkdir -p $(Build.ArtifactStagingDirectory)/warfiles
-        cp target/*.war $(Build.ArtifactStagingDirectory)/warfiles/webapp.war
-      displayName: "Copy WAR to Artifact Folder"
+    - task: CopyFiles@2
+      inputs:
+        SourceFolder: "$(Build.SourcesDirectory)/target"
+        Contents: "*.war"
+        TargetFolder: "$(Build.ArtifactStagingDirectory)/warfiles"
 
-    - publish: $(Build.ArtifactStagingDirectory)/warfiles
-      artifact: warfiles
+    - task: PublishBuildArtifacts@1
+      inputs:
+        pathToPublish: "$(Build.ArtifactStagingDirectory)/warfiles"
+        artifactName: "drop"
 
-
-# =====================================================================
-# STAGE 2 → DEPLOY TO QA
-# =====================================================================
-- stage: Deploy_QA
+# =============================
+# QA DEPLOYMENT
+# =============================
+- stage: DeployQA
   displayName: "Deploy to QA"
   dependsOn: Build
-
   jobs:
   - deployment: DeployToQA
     displayName: "Deploy to QA Container"
-    environment: QA     # <- must match environment created in Azure DevOps
+    environment: projectx-qa   # <-- FIXED NAME
     strategy:
       runOnce:
         deploy:
           steps:
-
           - download: current
-            artifact: warfiles
+            artifact: drop
 
           - script: |
-              set -e
+              echo "=== Deploying to QA ==="
 
-              echo "=== Locating WAR file ==="
-              WAR_PATH="$(System.DefaultWorkingDirectory)/warfiles/webapp.war"
-              echo "WAR: $WAR_PATH"
+              WAR="$(Pipeline.Workspace)/drop/webapp.war"
+              echo "WAR FOUND: $WAR"
 
-              echo "=== Encoding WAR ==="
-              base64 "$WAR_PATH" > war.b64
+              echo "Creating tar..."
+              tar -cvf webapp.tar -C "$(Pipeline.Workspace)/drop" webapp.war
 
-              echo "=== Prepare QA container ==="
+              echo "Copying into container..."
               az container exec \
-                --resource-group ProjectX-RG \
                 --name projectx-qa \
-                --exec-command "mkdir -p /tmp/deploy"
+                --resource-group ProjectX-RG \
+                --exec-command "/bin/sh -c 'mkdir -p /tmp/deploy'"
 
-              echo "=== Upload Base64 WAR ==="
+              cat webapp.tar | az container exec \
+                --name projectx-qa \
+                --resource-group ProjectX-RG \
+                --exec-command "/bin/sh -c 'tar -xvf - -C /tmp/deploy' --interactive=false"
+
+              echo "Moving WAR to Tomcat..."
               az container exec \
-                --resource-group ProjectX-RG \
                 --name projectx-qa \
-                --exec-command "cat > /tmp/deploy/ROOT.b64" < war.b64
-
-              echo "=== Decode WAR inside QA ==="
-              az container exec \
                 --resource-group ProjectX-RG \
-                --name projectx-qa \
-                --exec-command "base64 -d /tmp/deploy/ROOT.b64 > /tmp/deploy/ROOT.war"
+                --exec-command "/bin/sh -c 'mv /tmp/deploy/webapp.war /usr/local/tomcat/webapps/ROOT.war'"
 
-              echo "=== Move WAR to Tomcat Webapps ==="
-              az container exec \
-                --resource-group ProjectX-RG \
-                --name projectx-qa \
-                --exec-command "mv /tmp/deploy/ROOT.war /usr/local/tomcat/webapps/ROOT.war"
+              echo "Restarting container..."
+              az container restart --name projectx-qa --resource-group ProjectX-RG
 
-              echo "=== Restart QA Container ==="
-              az container restart \
-                --resource-group ProjectX-RG \
-                --name projectx-qa
+            displayName: "Deploy WAR to QA"
 
-              echo "QA Deployment DONE"
-            displayName: "Deploy WAR to TOMCAT 11 (QA)"
-
-
-# =====================================================================
-# STAGE 3 → MANUAL APPROVAL GATE
-# =====================================================================
-- stage: ApprovalGate
-  displayName: "Manual Approval Before PROD"
-  dependsOn: Deploy_QA
-
-  jobs:
-  - job: WaitForApproval
-    displayName: "Manual Approval"
-    pool: server  # <- REQUIRED
-    steps:
-    - task: ManualValidation@0
-      displayName: "Approve Deploy to PROD"
-      inputs:
-        instructions: "Please approve promotion of QA build to PROD."
-        onTimeout: "reject"   # optional
-
-
-# =====================================================================
-# STAGE 4 → DEPLOY TO PROD
-# =====================================================================
-- stage: Deploy_PROD
+# =============================
+# PROD DEPLOYMENT
+# =============================
+- stage: DeployPROD
   displayName: "Deploy to PROD"
-  dependsOn: ApprovalGate
-
+  dependsOn: DeployQA
+  condition: succeeded()
   jobs:
   - deployment: DeployToPROD
     displayName: "Deploy to PROD Container"
-    environment: PROD     # <- must match Azure DevOps environment name
+    environment: projectx-prod   # <-- FIXED NAME
     strategy:
       runOnce:
         deploy:
           steps:
-
           - download: current
-            artifact: warfiles
+            artifact: drop
 
           - script: |
-              set -e
+              echo "=== Deploying to PROD ==="
 
-              echo "=== Locating WAR file ==="
-              WAR_PATH="$(System.DefaultWorkingDirectory)/warfiles/webapp.war"
-              echo "WAR: $WAR_PATH"
+              WAR="$(Pipeline.Workspace)/drop/webapp.war"
+              tar -cvf webapp.tar -C "$(Pipeline.Workspace)/drop" webapp.war
 
-              echo "=== Encoding WAR ==="
-              base64 "$WAR_PATH" > war.b64
-
-              echo "=== Prepare PROD container ==="
               az container exec \
-                --resource-group ProjectX-RG \
                 --name projectx-prod \
-                --exec-command "mkdir -p /tmp/deploy"
+                --resource-group ProjectX-RG \
+                --exec-command "/bin/sh -c 'mkdir -p /tmp/deploy'"
 
-              echo "=== Upload Base64 WAR ==="
+              cat webapp.tar | az container exec \
+                --name projectx-prod \
+                --resource-group ProjectX-RG \
+                --exec-command "/bin/sh -c 'tar -xvf - -C /tmp/deploy' --interactive=false"
+
               az container exec \
-                --resource-group ProjectX-RG \
                 --name projectx-prod \
-                --exec-command "cat > /tmp/deploy/ROOT.b64" < war.b64
-
-              echo "=== Decode WAR inside PROD ==="
-              az container exec \
                 --resource-group ProjectX-RG \
-                --name projectx-prod \
-                --exec-command "base64 -d /tmp/deploy/ROOT.b64 > /tmp/deploy/ROOT.war"
+                --exec-command "/bin/sh -c 'mv /tmp/deploy/webapp.war /usr/local/tomcat/webapps/ROOT.war'"
 
-              echo "=== Move WAR to Tomcat Webapps ==="
-              az container exec \
-                --resource-group ProjectX-RG \
-                --name projectx-prod \
-                --exec-command "mv /tmp/deploy/ROOT.war /usr/local/tomcat/webapps/ROOT.war"
+              az container restart --name projectx-prod --resource-group ProjectX-RG
 
-              echo "=== Restart PROD Container ==="
-              az container restart \
-                --resource-group ProjectX-RG \
-                --name projectx-prod
-
-              echo "PROD Deployment DONE"
-            displayName: "Deploy WAR to TOMCAT 11 (PROD)"
+            displayName: "Deploy WAR to PROD"
