@@ -32,7 +32,7 @@ stages:
     - task: CopyFiles@2
       displayName: "Copy WAR to staging"
       inputs:
-        Contents: "**/target/*.war"
+        Contents: "webapp/target/*.war"
         TargetFolder: "$(Build.ArtifactStagingDirectory)"
 
     - task: PublishBuildArtifacts@1
@@ -43,7 +43,7 @@ stages:
         publishLocation: "Container"
 
 # ================================================================
-#                      DOCKER BUILD & PUSH
+#                DOCKER BUILD & PUSH
 # ================================================================
 - stage: Docker
   displayName: "Build & Push Docker Image"
@@ -55,35 +55,30 @@ stages:
       artifact: warfiles
 
     - script: |
-        echo "=== Preparing Dockerfile and WAR ==="
+        echo "Preparing Dockerfile..."
+        cp "$(Pipeline.Workspace)/warfiles/webapp.war" ./webapp.war
 
-        WAR_FILE=$(find $(Pipeline.Workspace)/warfiles -name "*.war" | head -1)
+        cat <<EOF > Dockerfile
+        FROM tomcat:9.0
+        COPY webapp.war /usr/local/tomcat/webapps/ROOT.war
+        EOF
 
-        cp "$WAR_FILE" webapp.war
-
-        cat > Dockerfile <<EOF
-FROM tomcat:9.0
-COPY webapp.war /usr/local/tomcat/webapps/ROOT.war
-EOF
-
-        echo "=== Building Docker image ==="
+        echo "Building Docker image..."
         docker build -t "$(ACR_NAME).azurecr.io/$(IMAGE_NAME):$(Build.BuildId)" .
 
-        echo "=== Logging into ACR ==="
+        echo "Login to ACR..."
         az acr login --name "$(ACR_NAME)"
 
-        echo "=== Tagging image ==="
         docker tag "$(ACR_NAME).azurecr.io/$(IMAGE_NAME):$(Build.BuildId)" \
-                   "$(ACR_NAME).azurecr.io/$(IMAGE_NAME):latest"
+                    "$(ACR_NAME).azurecr.io/$(IMAGE_NAME):latest"
 
-        echo "=== Pushing image ==="
+        echo "Pushing image..."
         docker push "$(ACR_NAME).azurecr.io/$(IMAGE_NAME):$(Build.BuildId)"
         docker push "$(ACR_NAME).azurecr.io/$(IMAGE_NAME):latest"
       displayName: "Build & Push Docker Image"
-      failOnStderr: false
 
 # ================================================================
-#                        QA DEPLOYMENT
+#                      QA DEPLOYMENT
 # ================================================================
 - stage: Deploy_QA
   displayName: "Deploy to QA"
@@ -92,13 +87,7 @@ EOF
   - job: QADeploy
     steps:
     - script: |
-        echo "=== Deploying to QA ==="
-
-        az container delete \
-          --resource-group "$(RESOURCE_GROUP)" \
-          --name "$(QA_CONTAINER)" \
-          --yes
-
+        echo "Deploying to QA..."
         az container create \
           --resource-group "$(RESOURCE_GROUP)" \
           --name "$(QA_CONTAINER)" \
@@ -109,10 +98,9 @@ EOF
           --restart-policy Always \
           --ports 8080
       displayName: "Deploy to QA ACI"
-      failOnStderr: false
 
 # ================================================================
-#                        PROD DEPLOYMENT
+#                     PROD DEPLOYMENT
 # ================================================================
 - stage: Deploy_Prod
   displayName: "Deploy to PROD"
@@ -121,13 +109,7 @@ EOF
   - job: ProdDeploy
     steps:
     - script: |
-        echo "=== Deploying to PROD ==="
-
-        az container delete \
-          --resource-group "$(RESOURCE_GROUP)" \
-          --name "$(PROD_CONTAINER)" \
-          --yes
-
+        echo "Deploying to PROD..."
         az container create \
           --resource-group "$(RESOURCE_GROUP)" \
           --name "$(PROD_CONTAINER)" \
@@ -138,4 +120,3 @@ EOF
           --restart-policy Always \
           --ports 8080
       displayName: "Deploy to PROD ACI"
-      failOnStderr: false
