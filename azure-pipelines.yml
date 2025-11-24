@@ -46,12 +46,11 @@ stages:
   jobs:
   - deployment: DeployQA
     displayName: "QA Deployment"
-    environment: "projectx-qa"   # Uses Azure DevOps environment
+    environment: "projectx-qa"   # ✔ CORRECT placement
     strategy:
       runOnce:
         deploy:
           steps:
-
           - download: current
             artifact: warfiles
 
@@ -71,15 +70,14 @@ stages:
 - stage: Deploy_Prod
   displayName: "Deploy to PROD Container"
   dependsOn: Deploy_QA
-  environment: "projectx-prod"   # manual approval happens here
   jobs:
   - deployment: DeployProd
     displayName: "Production Deployment"
+    environment: "projectx-prod"   # ✔ CORRECT placement (approval triggered here)
     strategy:
       runOnce:
         deploy:
           steps:
-
           - download: current
             artifact: warfiles
 
