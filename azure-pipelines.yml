@@ -4,6 +4,9 @@ trigger:
 pool:
   name: SelfHostedPool
 
+variables:
+  WAR_NAME: 'webapp.war'
+
 stages:
 
 # ---------------------- #
@@ -46,7 +49,7 @@ stages:
   jobs:
   - deployment: DeployQA
     displayName: "QA Deployment"
-    environment: "projectx-qa"   # ✔ CORRECT placement
+    environment: "projectx-qa"
     strategy:
       runOnce:
         deploy:
@@ -59,7 +62,7 @@ stages:
               az container exec \
                 --resource-group ProjectX-RG \
                 --name projectx-qa \
-                --exec-command "rm -rf /usr/local/tomcat/webapps/ROOT && cp /mnt/warfiles/*.war /usr/local/tomcat/webapps/ROOT.war"
+                --exec-command "rm -rf /usr/local/tomcat/webapps/ROOT && cp /mnt/warfiles/$(WAR_NAME) /usr/local/tomcat/webapps/ROOT.war"
             displayName: "Copy WAR into QA Tomcat container"
 
 
@@ -73,7 +76,7 @@ stages:
   jobs:
   - deployment: DeployProd
     displayName: "Production Deployment"
-    environment: "projectx-prod"   # ✔ CORRECT placement (approval triggered here)
+    environment: "projectx-prod"
     strategy:
       runOnce:
         deploy:
@@ -86,5 +89,5 @@ stages:
               az container exec \
                 --resource-group ProjectX-RG \
                 --name projectx-prod \
-                --exec-command "rm -rf /usr/local/tomcat/webapps/ROOT && cp /mnt/warfiles/*.war /usr/local/tomcat/webapps/ROOT.war"
+                --exec-command "rm -rf /usr/local/tomcat/webapps/ROOT && cp /mnt/warfiles/$(WAR_NAME) /usr/local/tomcat/webapps/ROOT.war"
             displayName: "Copy WAR into PROD Tomcat container"
