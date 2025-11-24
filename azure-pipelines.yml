@@ -10,7 +10,7 @@ variables:
 stages:
 
 # ================================================================
-#  BUILD
+#  BUILD STAGE
 # ================================================================
 - stage: Build
   displayName: Build Java Project
@@ -39,7 +39,7 @@ stages:
 
 
 # ================================================================
-#  QA DEPLOY
+#  QA DEPLOY STAGE (Deploy WAR into ACI via tar upload)
 # ================================================================
 - stage: QA
   displayName: Deploy to QA
@@ -48,7 +48,7 @@ stages:
   jobs:
     - deployment: DeployToQA
       displayName: Deploy WAR to QA
-      environment: ProjectX-QA      # ✔ VALID HERE
+      environment: projectx-qa     # Your Azure DevOps environment
       strategy:
         runOnce:
           deploy:
@@ -58,30 +58,35 @@ stages:
                 artifact: warfiles
 
               - task: CmdLine@2
-                displayName: Deploy WAR to QA via HTTP
+                displayName: Deploy WAR to QA (tar upload)
                 inputs:
                   script: |
                     echo "=== Locating WAR file ==="
                     WAR_PATH=$(find "$(Pipeline.Workspace)/warfiles" -name "*.war" | head -n 1)
-                    echo "Found WAR: $WAR_PATH"
+                    echo "WAR Found: $WAR_PATH"
 
-                    AGENT_IP=$(hostname -I | awk '{print $1}')
-                    echo "Agent IP: $AGENT_IP"
+                    echo "=== Creating TAR archive ==="
+                    TAR_PATH="/tmp/deploy.tar"
+                    tar -cvf $TAR_PATH -C "$(dirname "$WAR_PATH")" "$(basename "$WAR_PATH")"
 
-                    echo "=== Starting temp HTTP server ==="
-                    cd "$(dirname "$WAR_PATH")"
-                    python3 -m http.server 9000 &
-                    HTTP_PID=$!
-                    sleep 3
-
-                    echo "=== Downloading WAR inside container ==="
+                    echo "=== Creating directory inside container ==="
                     az container exec \
                       --resource-group ProjectX-RG \
                       --name projectx-qa \
-                      --exec-command "curl -L -o /usr/local/tomcat/webapps/ROOT.war http://$AGENT_IP:9000/$(basename "$WAR_PATH")"
+                      --exec-command "mkdir -p /tmp/deploy"
 
-                    echo "=== Stopping HTTP server ==="
-                    kill $HTTP_PID
+                    echo "=== Uploading TAR to container via stdin ==="
+                    cat "$TAR_PATH" | \
+                    az container exec \
+                      --resource-group ProjectX-RG \
+                      --name projectx-qa \
+                      --exec-command "tar -xvf - -C /tmp/deploy"
+
+                    echo "=== Moving WAR into Tomcat webapps ==="
+                    az container exec \
+                      --resource-group ProjectX-RG \
+                      --name projectx-qa \
+                      --exec-command "mv /tmp/deploy/*.war /usr/local/tomcat/webapps/ROOT.war"
 
                     echo "=== Restarting QA container ==="
                     az container restart \
@@ -89,8 +94,9 @@ stages:
                       --name projectx-qa
 
 
+
 # ================================================================
-#  PROD DEPLOY
+#  PROD DEPLOY STAGE (manual approval in Azure DevOps)
 # ================================================================
 - stage: PROD
   displayName: Deploy to PROD
@@ -99,7 +105,7 @@ stages:
   jobs:
     - deployment: DeployToProd
       displayName: Deploy WAR to PROD
-      environment: ProjectX-PROD       # ✔ VALID HERE
+      environment: projectx-prod     # Approval controlled in DevOps UI
       strategy:
         runOnce:
           deploy:
@@ -109,30 +115,35 @@ stages:
                 artifact: warfiles
 
               - task: CmdLine@2
-                displayName: Deploy WAR to PROD via HTTP
+                displayName: Deploy WAR to PROD (tar upload)
                 inputs:
                   script: |
                     echo "=== Locating WAR file ==="
                     WAR_PATH=$(find "$(Pipeline.Workspace)/warfiles" -name "*.war" | head -n 1)
-                    echo "Found WAR: $WAR_PATH"
+                    echo "WAR Found: $WAR_PATH"
 
-                    AGENT_IP=$(hostname -I | awk '{print $1}')
-                    echo "Agent IP: $AGENT_IP"
+                    echo "=== Creating TAR archive ==="
+                    TAR_PATH="/tmp/deploy.tar"
+                    tar -cvf $TAR_PATH -C "$(dirname "$WAR_PATH")" "$(basename "$WAR_PATH")"
 
-                    echo "=== Starting temp HTTP server ==="
-                    cd "$(dirname "$WAR_PATH")"
-                    python3 -m http.server 9000 &
-                    HTTP_PID=$!
-                    sleep 3
-
-                    echo "=== Downloading WAR inside container ==="
+                    echo "=== Creating directory inside container ==="
                     az container exec \
                       --resource-group ProjectX-RG \
                       --name projectx-prod \
-                      --exec-command "curl -L -o /usr/local/tomcat/webapps/ROOT.war http://$AGENT_IP:9000/$(basename "$WAR_PATH")"
+                      --exec-command "mkdir -p /tmp/deploy"
 
-                    echo "=== Stopping HTTP server ==="
-                    kill $HTTP_PID
+                    echo "=== Uploading TAR to container via stdin ==="
+                    cat "$TAR_PATH" | \
+                    az container exec \
+                      --resource-group ProjectX-RG \
+                      --name projectx-prod \
+                      --exec-command "tar -xvf - -C /tmp/deploy"
+
+                    echo "=== Moving WAR into Tomcat webapps ==="
+                    az container exec \
+                      --resource-group ProjectX-RG \
+                      --name projectx-prod \
+                      --exec-command "mv /tmp/deploy/*.war /usr/local/tomcat/webapps/ROOT.war"
 
                     echo "=== Restarting PROD container ==="
                     az container restart \
