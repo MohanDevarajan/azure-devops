@@ -77,11 +77,11 @@ stages:
 
               sleep 3
 
-              echo "=== Downloading WAR inside QA container ==="
+              echo "=== Downloading WAR inside QA container using wget ==="
               az container exec \
                 --resource-group ProjectX-RG \
                 --name projectx-qa \
-                --exec-command "curl -o /usr/local/tomcat/webapps/ROOT.war http://$AGENT_IP:9000/$(basename $WAR_PATH)"
+                --exec-command "wget -O /usr/local/tomcat/webapps/ROOT.war http://$AGENT_IP:9000/$(basename $WAR_PATH)"
 
               echo "=== Stopping HTTP server ==="
               kill $SERVER_PID
@@ -95,14 +95,14 @@ stages:
 
 # ============================
 #       DEPLOY TO PROD
-#       (with approval)
+#       (after approval)
 # ============================
 - stage: Deploy_Prod
   displayName: "Deploy to PROD Container"
   dependsOn: Deploy_QA
   jobs:
   - deployment: DeployProd
-    environment: "projectx-prod"   # Approval handled in Azure DevOps UI
+    environment: "projectx-prod"   # Manual approval configured in DevOps UI
     strategy:
       runOnce:
         deploy:
@@ -131,11 +131,11 @@ stages:
 
               sleep 3
 
-              echo "=== Downloading WAR inside PROD container ==="
+              echo "=== Downloading WAR inside PROD container using wget ==="
               az container exec \
                 --resource-group ProjectX-RG \
                 --name projectx-prod \
-                --exec-command "curl -o /usr/local/tomcat/webapps/ROOT.war http://$AGENT_IP:9000/$(basename $WAR_PATH)"
+                --exec-command "wget -O /usr/local/tomcat/webapps/ROOT.war http://$AGENT_IP:9000/$(basename $WAR_PATH)"
 
               echo "=== Stopping HTTP server ==="
               kill $SERVER_PID
