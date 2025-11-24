@@ -1,147 +1,162 @@
 trigger:
-- main
+  - main
 
 pool:
-  name: SelfHostedPool
+  name: SelfHostedPool   # your private agent pool
 
 variables:
-  WAR_NAME: 'webapp.war'
+  javaVersion: '17'
+  artifactName: 'warfiles'
 
 stages:
 
-# ============================
-#       BUILD STAGE
-# ============================
+# ================================================================
+#  BUILD STAGE
+# ================================================================
 - stage: Build
-  displayName: "Build Java WAR"
+  displayName: Build Java Project
   jobs:
-  - job: BuildJob
-    steps:
-    - task: Maven@3
-      inputs:
-        mavenPomFile: 'pom.xml'
-        mavenOptions: '-Xmx3072m'
-        javaHomeOption: 'JDKVersion'
-        jdkVersionOption: '1.11'
-        jdkArchitectureOption: 'x64'
-        publishJUnitResults: true
-        testResultsFiles: '**/surefire-reports/TEST-*.xml'
-        goals: 'package'
+    - job: MavenBuild
+      displayName: Maven Build Job
+      steps:
 
-    - task: CopyFiles@2
-      inputs:
-        Contents: '**/*.war'
-        TargetFolder: '$(Build.ArtifactStagingDirectory)'
+        - task: Maven@3
+          displayName: Build WAR using Maven
+          inputs:
+            mavenPomFile: 'pom.xml'
+            goals: 'clean package'
+            publishJUnitResults: false
 
-    - task: PublishBuildArtifacts@1
-      inputs:
-        PathtoPublish: '$(Build.ArtifactStagingDirectory)'
-        ArtifactName: 'warfiles'
-        publishLocation: 'Container'
+        - task: CopyFiles@2
+          displayName: Copy WAR to artifact folder
+          inputs:
+            SourceFolder: '$(System.DefaultWorkingDirectory)'
+            Contents: '**/*.war'
+            TargetFolder: '$(Build.ArtifactStagingDirectory)/$(artifactName)'
+
+        - task: PublishBuildArtifacts@1
+          displayName: Publish WAR Artifact
+          inputs:
+            PathtoPublish: '$(Build.ArtifactStagingDirectory)/$(artifactName)'
+            ArtifactName: '$(artifactName)'
 
 
-# ============================
-#       DEPLOY TO QA
-# ============================
-- stage: Deploy_QA
-  displayName: "Deploy to QA Container"
+# ================================================================
+#  QA DEPLOY STAGE
+# ================================================================
+- stage: QA
+  displayName: Deploy to QA
   dependsOn: Build
+
+  # This requires approval in Azure DevOps -> Environments
+  environment: ProjectX-QA
+
   jobs:
-  - deployment: DeployQA
-    environment: "projectx-qa"
-    strategy:
-      runOnce:
-        deploy:
-          steps:
-          - download: current
-            artifact: warfiles
+    - deployment: DeployToQA
+      displayName: Deploy WAR into QA Container
+      environment: ProjectX-QA
+      strategy:
+        runOnce:
+          deploy:
+            steps:
+              - download: current
+                artifact: warfiles
 
-          - script: |
-              echo "=== Locating WAR file ==="
-              WAR_PATH=$(find "$(Pipeline.Workspace)/warfiles" -name "*.war" | head -n 1)
+              - task: CmdLine@2
+                displayName: Deploy WAR to QA via HTTP
+                inputs:
+                  script: |
+                    echo "=== Locating WAR file ==="
+                    WAR_PATH=$(find "$(Pipeline.Workspace)/warfiles" -name "*.war" | head -n 1)
 
-              if [ -z "$WAR_PATH" ]; then
-                echo "WAR not found!"
-                exit 1
-              fi
+                    if [ -z "$WAR_PATH" ]; then
+                      echo "ERROR: WAR file not found!"
+                      exit 1
+                    fi
 
-              echo "WAR found at: $WAR_PATH"
+                    echo "WAR found at: $WAR_PATH"
 
-              AGENT_IP=$(hostname -I | awk '{print $1}')
-              echo "Agent IP: $AGENT_IP"
+                    AGENT_IP=$(hostname -I | awk '{print $1}')
+                    echo "Agent IP: $AGENT_IP"
 
-              echo "=== Starting temp HTTP server ==="
-              cd "$(dirname "$WAR_PATH")"
-              python3 -m http.server 9000 &
-              SERVER_PID=$!
+                    echo "=== Starting temp HTTP server ==="
+                    cd "$(dirname "$WAR_PATH")"
+                    python3 -m http.server 9000 &
+                    HTTP_PID=$!
+                    sleep 3
 
-              sleep 3
+                    echo "=== Downloading WAR inside QA container using curl ==="
+                    az container exec \
+                      --resource-group ProjectX-RG \
+                      --name projectx-qa \
+                      --exec-command "curl -L -o /usr/local/tomcat/webapps/ROOT.war http://$AGENT_IP:9000/$(basename "$WAR_PATH")"
 
-              echo "=== Downloading WAR inside QA container using wget ==="
-              az container exec \
-                --resource-group ProjectX-RG \
-                --name projectx-qa \
-                --exec-command "wget -O /usr/local/tomcat/webapps/ROOT.war http://$AGENT_IP:9000/$(basename $WAR_PATH)"
+                    echo "=== Stopping HTTP server ==="
+                    kill $HTTP_PID
 
-              echo "=== Stopping HTTP server ==="
-              kill $SERVER_PID
+                    echo "=== Restarting QA container ==="
+                    az container restart \
+                      --resource-group ProjectX-RG \
+                      --name projectx-qa
 
-              echo "=== Restarting QA container ==="
-              az container restart --resource-group ProjectX-RG --name projectx-qa
-
-              echo "=== QA Deployment Complete ==="
-            displayName: "Deploy to QA via HTTP"
+                    echo "=== QA Deployment Completed Successfully ==="
 
 
-# ============================
-#       DEPLOY TO PROD
-#       (after approval)
-# ============================
-- stage: Deploy_Prod
-  displayName: "Deploy to PROD Container"
-  dependsOn: Deploy_QA
+# ================================================================
+#  PROD DEPLOY STAGE
+# ================================================================
+- stage: PROD
+  displayName: Deploy to PROD
+  dependsOn: QA
+
+  environment: ProjectX-PROD
+
   jobs:
-  - deployment: DeployProd
-    environment: "projectx-prod"   # Manual approval configured in DevOps UI
-    strategy:
-      runOnce:
-        deploy:
-          steps:
-          - download: current
-            artifact: warfiles
+    - deployment: DeployToProd
+      displayName: Deploy WAR into PROD Container
+      environment: ProjectX-PROD
+      strategy:
+        runOnce:
+          deploy:
+            steps:
+              - download: current
+                artifact: warfiles
 
-          - script: |
-              echo "=== Locating WAR file ==="
-              WAR_PATH=$(find "$(Pipeline.Workspace)/warfiles" -name "*.war" | head -n 1)
+              - task: CmdLine@2
+                displayName: Deploy WAR to PROD via HTTP
+                inputs:
+                  script: |
+                    echo "=== Locating WAR file ==="
+                    WAR_PATH=$(find "$(Pipeline.Workspace)/warfiles" -name "*.war" | head -n 1)
 
-              if [ -z "$WAR_PATH" ]; then
-                echo "WAR not found!"
-                exit 1
-              fi
+                    if [ -z "$WAR_PATH" ]; then
+                      echo "ERROR: WAR file not found!"
+                      exit 1
+                    fi
 
-              echo "WAR found at: $WAR_PATH"
+                    echo "WAR found at: $WAR_PATH"
 
-              AGENT_IP=$(hostname -I | awk '{print $1}')
-              echo "Agent IP: $AGENT_IP"
+                    AGENT_IP=$(hostname -I | awk '{print $1}')
+                    echo "Agent IP: $AGENT_IP"
 
-              echo "=== Starting temp HTTP server ==="
-              cd "$(dirname "$WAR_PATH")"
-              python3 -m http.server 9000 &
-              SERVER_PID=$!
+                    echo "=== Starting temp HTTP server ==="
+                    cd "$(dirname "$WAR_PATH")"
+                    python3 -m http.server 9000 &
+                    HTTP_PID=$!
+                    sleep 3
 
-              sleep 3
+                    echo "=== Downloading WAR inside PROD container using curl ==="
+                    az container exec \
+                      --resource-group ProjectX-RG \
+                      --name projectx-prod \
+                      --exec-command "curl -L -o /usr/local/tomcat/webapps/ROOT.war http://$AGENT_IP:9000/$(basename "$WAR_PATH")"
 
-              echo "=== Downloading WAR inside PROD container using wget ==="
-              az container exec \
-                --resource-group ProjectX-RG \
-                --name projectx-prod \
-                --exec-command "wget -O /usr/local/tomcat/webapps/ROOT.war http://$AGENT_IP:9000/$(basename $WAR_PATH)"
+                    echo "=== Stopping HTTP server ==="
+                    kill $HTTP_PID
 
-              echo "=== Stopping HTTP server ==="
-              kill $SERVER_PID
+                    echo "=== Restarting PROD container ==="
+                    az container restart \
+                      --resource-group ProjectX-RG \
+                      --name projectx-prod
 
-              echo "=== Restarting PROD container ==="
-              az container restart --resource-group ProjectX-RG --name projectx-prod
-
-              echo "=== PROD Deployment Complete ==="
-            displayName: "Deploy to PROD via HTTP"
+                    echo "=== PROD Deployment Completed Successfully ==="
