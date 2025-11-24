@@ -89,12 +89,12 @@ stages:
     - script: |
         echo "=== Deploying to QA ==="
         az container create \
-          --resource-group $(RESOURCE_GROUP) \
-          --name $(QA_CONTAINER) \
-          --image $(ACR_NAME).azurecr.io/$(IMAGE_NAME):$(Build.BuildId) \
-          --registry-login-server $(ACR_NAME).azurecr.io \
-          --registry-username $(ACR_USERNAME) \
-          --registry-password $(ACR_PASSWORD) \
+          --resource-group '$(RESOURCE_GROUP)' \
+          --name '$(QA_CONTAINER)' \
+          --image "$(ACR_NAME).azurecr.io/$(IMAGE_NAME):$(Build.BuildId)" \
+          --registry-login-server "$(ACR_NAME).azurecr.io" \
+          --registry-username "$(ACR_USERNAME)" \
+          --registry-password "$(ACR_PASSWORD)" \
           --restart-policy Always \
           --ports 8080
       displayName: "Deploy to QA ACI"
@@ -111,12 +111,12 @@ stages:
     - script: |
         echo "=== Deploying to PROD ==="
         az container create \
-          --resource-group $(RESOURCE_GROUP) \
-          --name $(PROD_CONTAINER) \
-          --image $(ACR_NAME).azurecr.io/$(IMAGE_NAME):$(Build.BuildId) \
-          --registry-login-server $(ACR_NAME).azurecr.io \
-          --registry-username $(ACR_USERNAME) \
-          --registry-password $(ACR_PASSWORD) \
+          --resource-group '$(RESOURCE_GROUP)' \
+          --name '$(PROD_CONTAINER)' \
+          --image "$(ACR_NAME).azurecr.io/$(IMAGE_NAME):$(Build.BuildId)" \
+          --registry-login-server "$(ACR_NAME).azurecr.io" \
+          --registry-username "$(ACR_USERNAME)" \
+          --registry-password "$(ACR_PASSWORD)" \
           --restart-policy Always \
           --ports 8080
       displayName: "Deploy to PROD ACI"
