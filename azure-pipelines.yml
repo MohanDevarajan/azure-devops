@@ -4,19 +4,13 @@ trigger:
 pool:
   name: SelfHostedPool
 
-variables:
-  WAR_NAME: 'webapp.war'
-  ARTIFACT_NAME: 'drop'   # ✅ use Azure DevOps default
-
 stages:
-
-# ---------------------- #
-#        BUILD STAGE     #
-# ---------------------- #
+# -----------------------------
+# 1. BUILD STAGE
+# -----------------------------
 - stage: Build
-  displayName: "Build Java WAR"
   jobs:
-  - job: BuildJob
+  - job: MavenBuild
     steps:
     - task: Maven@3
       inputs:
@@ -29,75 +23,88 @@ stages:
         testResultsFiles: '**/surefire-reports/TEST-*.xml'
         goals: 'package'
 
-    # ✅ Copy only the WAR file from target/
     - task: CopyFiles@2
       inputs:
-        Contents: 'target/*.war'
+        Contents: '**/*.war'
         TargetFolder: '$(Build.ArtifactStagingDirectory)'
 
     - task: PublishBuildArtifacts@1
       inputs:
         PathtoPublish: '$(Build.ArtifactStagingDirectory)'
-        ArtifactName: '$(ARTIFACT_NAME)'
+        ArtifactName: 'warfiles'
         publishLocation: 'Container'
 
 
-# ---------------------- #
-#      QA DEPLOY STAGE   #
-# ---------------------- #
+# -----------------------------
+# 2. QA DEPLOY
+# -----------------------------
 - stage: Deploy_QA
-  displayName: "Deploy to QA Container"
+  displayName: "Deploy to QA"
   dependsOn: Build
   jobs:
-  - deployment: DeployQA
-    displayName: "QA Deployment"
-    environment: "projectx-qa"
-    strategy:
-      runOnce:
-        deploy:
-          steps:
-          - download: current
-            artifact: $(ARTIFACT_NAME)
+  - job: QADeployJob
+    steps:
 
-          - script: |
-              echo "Listing WAR files in pipeline workspace..."
-              ls -l $(Pipeline.Workspace)/$(ARTIFACT_NAME)
-            displayName: "Debug: Verify WAR files"
+    - download: current
+      artifact: warfiles
 
-          - script: |
-              echo "Copying WAR into QA container..."
-              az container cp $(Pipeline.Workspace)/$(ARTIFACT_NAME)/$(WAR_NAME) ProjectX-RG/projectx-qa:/usr/local/tomcat/webapps/ROOT.war
-              echo "Restarting QA container..."
-              az container restart --resource-group ProjectX-RG --name projectx-qa
-            displayName: "Deploy WAR to QA"
+    - task: InstallSSHKey@0
+      inputs:
+        knownHostsEntry: '$(QA_HOST)'
+        sshKeySecureFile: 'id_rsa'
+
+    - task: Bash@3
+      displayName: "Copy WAR to QA container"
+      inputs:
+        targetType: inline
+        script: |
+          scp warfiles/*.war $(SSH_USER)@$(QA_HOST):/usr/local/tomcat/webapps/
+
+    - task: Bash@3
+      displayName: "Restart Tomcat in QA"
+      inputs:
+        targetType: inline
+        script: |
+          ssh $(SSH_USER)@$(QA_HOST) "pkill java; /usr/local/tomcat/bin/startup.sh"
 
 
-# ---------------------- #
-#   PROD DEPLOY STAGE    #
-#   (Manual Approval)    #
-# ---------------------- #
-- stage: Deploy_Prod
-  displayName: "Deploy to PROD Container"
+# -----------------------------
+# 3. MANUAL APPROVAL BEFORE PROD
+# -----------------------------
+- stage: Approval
   dependsOn: Deploy_QA
+  displayName: "Manual Approval Before Production"
+  approval: true
+
+
+# -----------------------------
+# 4. PROD DEPLOY
+# -----------------------------
+- stage: Deploy_Prod
+  displayName: "Deploy to Production"
+  dependsOn: Approval
   jobs:
-  - deployment: DeployProd
-    displayName: "Production Deployment"
-    environment: "projectx-prod"
-    strategy:
-      runOnce:
-        deploy:
-          steps:
-          - download: current
-            artifact: $(ARTIFACT_NAME)
+  - job: ProdDeployJob
+    steps:
 
-          - script: |
-              echo "Listing WAR files in pipeline workspace..."
-              ls -l $(Pipeline.Workspace)/$(ARTIFACT_NAME)
-            displayName: "Debug: Verify WAR files"
+    - download: current
+      artifact: warfiles
 
-          - script: |
-              echo "Copying WAR into PROD container..."
-              az container cp $(Pipeline.Workspace)/$(ARTIFACT_NAME)/$(WAR_NAME) ProjectX-RG/projectx-prod:/usr/local/tomcat/webapps/ROOT.war
-              echo "Restarting PROD container..."
-              az container restart --resource-group ProjectX-RG --name projectx-prod
-            displayName: "Deploy WAR to PROD"
+    - task: InstallSSHKey@0
+      inputs:
+        knownHostsEntry: '$(PROD_HOST)'
+        sshKeySecureFile: 'id_rsa'
+
+    - task: Bash@3
+      displayName: "Copy WAR to Prod container"
+      inputs:
+        targetType: inline
+        script: |
+          scp warfiles/*.war $(SSH_USER)@$(PROD_HOST):/usr/local/tomcat/webapps/
+
+    - task: Bash@3
+      displayName: "Restart Tomcat in Prod"
+      inputs:
+        targetType: inline
+        script: |
+          ssh $(SSH_USER)@$(PROD_HOST) "pkill java; /usr/local/tomcat/bin/startup.sh"
