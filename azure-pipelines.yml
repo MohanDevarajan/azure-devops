@@ -6,7 +6,7 @@ pool:
 
 variables:
   WAR_NAME: 'webapp.war'
-  ARTIFACT_NAME: 'warfiles'
+  ARTIFACT_NAME: 'drop'   # ✅ use Azure DevOps default
 
 stages:
 
