@@ -6,6 +6,7 @@ pool:
 
 variables:
   WAR_NAME: 'webapp.war'
+  ARTIFACT_NAME: 'warfiles'
 
 stages:
 
@@ -37,7 +38,7 @@ stages:
     - task: PublishBuildArtifacts@1
       inputs:
         PathtoPublish: '$(Build.ArtifactStagingDirectory)'
-        ArtifactName: 'warfiles'
+        ArtifactName: '$(ARTIFACT_NAME)'
         publishLocation: 'Container'
 
 
@@ -56,18 +57,16 @@ stages:
         deploy:
           steps:
           - download: current
-            artifact: warfiles
+            artifact: $(ARTIFACT_NAME)
 
-          # Debug step to confirm WAR exists
           - script: |
               echo "Listing WAR files in pipeline workspace..."
-              ls -l $(Pipeline.Workspace)/warfiles
+              ls -l $(Pipeline.Workspace)/$(ARTIFACT_NAME)
             displayName: "Debug: Verify WAR files"
 
-          # ✅ Correct az container cp syntax
           - script: |
               echo "Copying WAR into QA container..."
-              az container cp $(Pipeline.Workspace)/warfiles/$(WAR_NAME) ProjectX-RG/projectx-qa:/usr/local/tomcat/webapps/ROOT.war
+              az container cp $(Pipeline.Workspace)/$(ARTIFACT_NAME)/$(WAR_NAME) ProjectX-RG/projectx-qa:/usr/local/tomcat/webapps/ROOT.war
               echo "Restarting QA container..."
               az container restart --resource-group ProjectX-RG --name projectx-qa
             displayName: "Deploy WAR to QA"
@@ -89,16 +88,16 @@ stages:
         deploy:
           steps:
           - download: current
-            artifact: warfiles
+            artifact: $(ARTIFACT_NAME)
 
           - script: |
               echo "Listing WAR files in pipeline workspace..."
-              ls -l $(Pipeline.Workspace)/warfiles
+              ls -l $(Pipeline.Workspace)/$(ARTIFACT_NAME)
             displayName: "Debug: Verify WAR files"
 
           - script: |
               echo "Copying WAR into PROD container..."
-              az container cp $(Pipeline.Workspace)/warfiles/$(WAR_NAME) ProjectX-RG/projectx-prod:/usr/local/tomcat/webapps/ROOT.war
+              az container cp $(Pipeline.Workspace)/$(ARTIFACT_NAME)/$(WAR_NAME) ProjectX-RG/projectx-prod:/usr/local/tomcat/webapps/ROOT.war
               echo "Restarting PROD container..."
               az container restart --resource-group ProjectX-RG --name projectx-prod
             displayName: "Deploy WAR to PROD"
