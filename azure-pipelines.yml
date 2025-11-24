@@ -28,9 +28,10 @@ stages:
         testResultsFiles: '**/surefire-reports/TEST-*.xml'
         goals: 'package'
 
+    # ✅ Copy only the WAR file from target/
     - task: CopyFiles@2
       inputs:
-        Contents: '**/*.war'
+        Contents: 'target/*.war'
         TargetFolder: '$(Build.ArtifactStagingDirectory)'
 
     - task: PublishBuildArtifacts@1
@@ -57,10 +58,13 @@ stages:
           - download: current
             artifact: warfiles
 
+          # Debug step to confirm WAR exists
           - script: |
               echo "Listing WAR files in pipeline workspace..."
               ls -l $(Pipeline.Workspace)/warfiles
+            displayName: "Debug: Verify WAR files"
 
+          # ✅ Correct az container cp syntax
           - script: |
               echo "Copying WAR into QA container..."
               az container cp $(Pipeline.Workspace)/warfiles/$(WAR_NAME) ProjectX-RG/projectx-qa:/usr/local/tomcat/webapps/ROOT.war
@@ -90,6 +94,7 @@ stages:
           - script: |
               echo "Listing WAR files in pipeline workspace..."
               ls -l $(Pipeline.Workspace)/warfiles
+            displayName: "Debug: Verify WAR files"
 
           - script: |
               echo "Copying WAR into PROD container..."
