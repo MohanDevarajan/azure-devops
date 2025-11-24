@@ -68,8 +68,13 @@ stages:
         echo "=== Logging into ACR ==="
         az acr login --name $(ACR_NAME)
 
+        echo "=== Tagging image ==="
+        docker tag $(ACR_NAME).azurecr.io/$(IMAGE_NAME):$(Build.BuildId) \
+                   $(ACR_NAME).azurecr.io/$(IMAGE_NAME):latest
+
         echo "=== Pushing image to ACR ==="
         docker push $(ACR_NAME).azurecr.io/$(IMAGE_NAME):$(Build.BuildId)
+        docker push $(ACR_NAME).azurecr.io/$(IMAGE_NAME):latest
       displayName: "Build & Push Docker Image"
 
 # ================================================================
@@ -88,6 +93,8 @@ stages:
           --name $(QA_CONTAINER) \
           --image $(ACR_NAME).azurecr.io/$(IMAGE_NAME):$(Build.BuildId) \
           --registry-login-server $(ACR_NAME).azurecr.io \
+          --registry-username $(ACR_USERNAME) \
+          --registry-password $(ACR_PASSWORD) \
           --restart-policy Always \
           --ports 8080
       displayName: "Deploy to QA ACI"
@@ -108,6 +115,8 @@ stages:
           --name $(PROD_CONTAINER) \
           --image $(ACR_NAME).azurecr.io/$(IMAGE_NAME):$(Build.BuildId) \
           --registry-login-server $(ACR_NAME).azurecr.io \
+          --registry-username $(ACR_USERNAME) \
+          --registry-password $(ACR_PASSWORD) \
           --restart-policy Always \
           --ports 8080
       displayName: "Deploy to PROD ACI"
