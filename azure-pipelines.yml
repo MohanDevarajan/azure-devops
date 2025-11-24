@@ -10,7 +10,7 @@ variables:
 stages:
 
 # -------------------------------------------------- #
-#                       BUILD                         #
+#                        BUILD                        #
 # -------------------------------------------------- #
 - stage: Build
   displayName: "Build Java WAR"
@@ -42,7 +42,7 @@ stages:
 
 
 # -------------------------------------------------- #
-#                   DEPLOY TO QA                      #
+#                    DEPLOY TO QA                     #
 # -------------------------------------------------- #
 - stage: Deploy_QA
   displayName: "Deploy to QA Container"
@@ -59,10 +59,10 @@ stages:
             artifact: warfiles
 
           - script: |
-              echo "=== LISTING ARTIFACT CONTENTS ==="
+              echo "=== LIST DOWNLOADED ARTIFACTS ==="
               ls -R "$(Pipeline.Workspace)/warfiles"
 
-              echo "=== LOCATING WAR FILE ==="
+              echo "=== FIND WAR FILE ==="
               WAR_PATH=$(find "$(Pipeline.Workspace)/warfiles" -name "*.war" | head -n 1)
 
               if [ -z "$WAR_PATH" ]; then
@@ -70,46 +70,55 @@ stages:
                 exit 1
               fi
 
-              echo "WAR file located at: $WAR_PATH"
+              echo "WAR found at: $WAR_PATH"
 
-              echo "=== ENCODING WAR AS BASE64 ==="
+              echo "=== BASE64 ENCODING WAR ==="
               base64 "$WAR_PATH" > war.b64
 
-              echo "=== PREPARING CONTAINER DIRECTORY ==="
+              echo "=== PREPARE DIRECTORY IN QA CONTAINER ==="
               az container exec \
                 --resource-group ProjectX-RG \
                 --name projectx-qa \
                 --exec-command "mkdir -p /tmp/deploy"
 
-              echo "=== TRANSFERRING BASE64 WAR INTO QA CONTAINER ==="
-              cat war.b64 | az container exec \
+              echo "=== CLEAR OLD FILE ==="
+              az container exec \
                 --resource-group ProjectX-RG \
                 --name projectx-qa \
-                --exec-command "sh -c 'cat > /tmp/deploy/ROOT.b64'"
+                --exec-command "sh -c 'echo -n \"\" > /tmp/deploy/ROOT.b64'"
 
-              echo "=== DECODING WAR INSIDE QA CONTAINER ==="
+              echo "=== TRANSFERRING BASE64 WAR IN CHUNKS ==="
+              while IFS= read -r line; do
+                az container exec \
+                  --resource-group ProjectX-RG \
+                  --name projectx-qa \
+                  --exec-command "sh -c 'printf \"%s\n\" \"$line\" >> /tmp/deploy/ROOT.b64'"
+              done < war.b64
+
+              echo "=== DECODE WAR INSIDE CONTAINER ==="
               az container exec \
                 --resource-group ProjectX-RG \
                 --name projectx-qa \
                 --exec-command "base64 -d /tmp/deploy/ROOT.b64 > /tmp/deploy/ROOT.war"
 
-              echo "=== MOVING WAR TO TOMCAT WEBAPPS ==="
+              echo "=== MOVE WAR TO TOMCAT ==="
               az container exec \
                 --resource-group ProjectX-RG \
                 --name projectx-qa \
                 --exec-command "mv /tmp/deploy/ROOT.war /usr/local/tomcat/webapps/ROOT.war"
 
-              echo "=== RESTARTING QA CONTAINER ==="
+              echo "=== RESTART QA CONTAINER ==="
               az container restart --resource-group ProjectX-RG --name projectx-qa
 
               echo "=== QA DEPLOYMENT COMPLETE ==="
+
             displayName: "Deploy WAR to QA"
 
 
 
 # -------------------------------------------------- #
-#                 DEPLOY TO PROD                      #
-#                (Manual Approval)                    #
+#                    DEPLOY TO PROD                   #
+#                (Manual Environment Gate)            #
 # -------------------------------------------------- #
 - stage: Deploy_Prod
   displayName: "Deploy to PROD Container"
@@ -117,7 +126,7 @@ stages:
   jobs:
   - deployment: DeployProd
     displayName: "Production Deployment"
-    environment: "projectx-prod"     # <-- THIS triggers manual approval!
+    environment: "projectx-prod"    # <-- MUST BE APPROVAL ENVIRONMENT
     strategy:
       runOnce:
         deploy:
@@ -126,48 +135,56 @@ stages:
             artifact: warfiles
 
           - script: |
-              echo "=== LISTING ARTIFACT CONTENTS ==="
+              echo "=== LIST DOWNLOADED ARTIFACTS ==="
               ls -R "$(Pipeline.Workspace)/warfiles"
 
-              echo "=== LOCATING WAR FILE ==="
+              echo "=== FIND WAR FILE ==="
               WAR_PATH=$(find "$(Pipeline.Workspace)/warfiles" -name "*.war" | head -n 1)
-
               if [ -z "$WAR_PATH" ]; then
-                echo "ERROR: No WAR file found!"
+                echo "ERROR: No WAR found!"
                 exit 1
               fi
 
-              echo "WAR file located at: $WAR_PATH"
+              echo "WAR found at: $WAR_PATH"
 
-              echo "=== ENCODING WAR AS BASE64 ==="
+              echo "=== BASE64 ENCODING WAR ==="
               base64 "$WAR_PATH" > war.b64
 
-              echo "=== PREPARING CONTAINER DIRECTORY ==="
+              echo "=== PREPARE DIRECTORY IN PROD CONTAINER ==="
               az container exec \
                 --resource-group ProjectX-RG \
                 --name projectx-prod \
                 --exec-command "mkdir -p /tmp/deploy"
 
-              echo "=== TRANSFERRING BASE64 WAR INTO PROD CONTAINER ==="
-              cat war.b64 | az container exec \
+              echo "=== CLEAR OLD FILE ==="
+              az container exec \
                 --resource-group ProjectX-RG \
                 --name projectx-prod \
-                --exec-command "sh -c 'cat > /tmp/deploy/ROOT.b64'"
+                --exec-command "sh -c 'echo -n \"\" > /tmp/deploy/ROOT.b64'"
 
-              echo "=== DECODING WAR INSIDE PROD CONTAINER ==="
+              echo "=== TRANSFERRING BASE64 WAR IN CHUNKS ==="
+              while IFS= read -r line; do
+                az container exec \
+                  --resource-group ProjectX-RG \
+                  --name projectx-prod \
+                  --exec-command "sh -c 'printf \"%s\n\" \"$line\" >> /tmp/deploy/ROOT.b64'"
+              done < war.b64
+
+              echo "=== DECODE WAR INSIDE CONTAINER ==="
               az container exec \
                 --resource-group ProjectX-RG \
                 --name projectx-prod \
                 --exec-command "base64 -d /tmp/deploy/ROOT.b64 > /tmp/deploy/ROOT.war"
 
-              echo "=== MOVING WAR TO TOMCAT WEBAPPS ==="
+              echo "=== MOVE WAR TO TOMCAT ==="
               az container exec \
                 --resource-group ProjectX-RG \
                 --name projectx-prod \
                 --exec-command "mv /tmp/deploy/ROOT.war /usr/local/tomcat/webapps/ROOT.war"
 
-              echo "=== RESTARTING PROD CONTAINER ==="
+              echo "=== RESTART PROD CONTAINER ==="
               az container restart --resource-group ProjectX-RG --name projectx-prod
 
               echo "=== PROD DEPLOYMENT COMPLETE ==="
+
             displayName: "Deploy WAR to PROD"
