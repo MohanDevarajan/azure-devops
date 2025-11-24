@@ -6,9 +6,9 @@ pool:
 
 stages:
 
-# ======================================================
+# --------------------------------------------------------
 # BUILD STAGE
-# ======================================================
+# --------------------------------------------------------
 - stage: Build
   displayName: "Build WAR"
   jobs:
@@ -16,35 +16,29 @@ stages:
     displayName: "Maven Build"
     steps:
 
-    # --- Debug workspace to verify correct folders ---
     - script: |
         echo "=== Workspace before build ==="
         ls -R $(Build.SourcesDirectory)
       displayName: "Debug Workspace"
 
-    # --- Install Java (self-hosted needs this) ---
     - task: JavaToolInstaller@0
       displayName: "Install JDK 17"
       inputs:
         versionSpec: "17"
         jdkSourceOption: "PreInstalled"
 
-    # --- Maven build ---
     - task: Maven@3
       displayName: "Build WAR with Maven"
       inputs:
         mavenPomFile: "pom.xml"
         goals: "clean package"
-        options: "-DskipTests"
-        publishJUnitResults: true
+        publishJUnitResults: false
 
-    # --- Confirm target folder exists ---
     - script: |
         echo "=== Listing target directory ==="
-        ls -R $(Build.SourcesDirectory)/target || echo "❌ target folder missing!"
+        ls -R $(Build.SourcesDirectory)/target
       displayName: "Verify target folder"
 
-    # --- Copy WAR as artifact ---
     - task: CopyFiles@2
       displayName: "Copy WAR to staging"
       inputs:
@@ -52,7 +46,6 @@ stages:
         Contents: "*.war"
         TargetFolder: "$(Build.ArtifactStagingDirectory)"
 
-    # --- Publish artifact ---
     - task: PublishBuildArtifacts@1
       displayName: "Publish WAR Artifact"
       inputs:
@@ -60,94 +53,94 @@ stages:
         ArtifactName: "warfiles"
         publishLocation: "Container"
 
-# ======================================================
-# DEPLOY TO QA
-# ======================================================
+# --------------------------------------------------------
+# DEPLOY QA
+# --------------------------------------------------------
 - stage: DeployQA
   displayName: "Deploy to QA"
   dependsOn: Build
-  environment: projectx-qa
+
   jobs:
-  - job: DeployToQA
-    displayName: "Deploy WAR to QA"
-    steps:
+  - deployment: DeployToQA
+    displayName: "Deploy to QA Container"
+    environment: projectx-qa
 
-    - download: current
-      artifact: warfiles
+    strategy:
+      runOnce:
+        deploy:
+          steps:
 
-    - script: |
-        echo "=== Extract WAR Path ==="
-        WAR=$(ls $(Pipeline.Workspace)/warfiles/*.war)
-        echo "WAR found at: $WAR"
+          - download: current
+            artifact: warfiles
 
-        echo "=== Creating TAR package ==="
-        tar -cvf webapp.tar -C $(Pipeline.Workspace)/warfiles $(basename $WAR)
+          - script: |
+              WAR=$(ls $(Pipeline.Workspace)/warfiles/*.war)
+              echo "WAR found: $WAR"
 
-        echo "=== Sending tar into QA container ==="
-        az container exec \
-          --resource-group ProjectX-RG \
-          --name projectx-qa \
-          --exec-command "mkdir -p /tmp/deploy"
+              tar -cvf webapp.tar -C $(Pipeline.Workspace)/warfiles $(basename $WAR)
 
-        cat webapp.tar | az container exec \
-          --resource-group ProjectX-RG \
-          --name projectx-qa \
-          --exec-command "tar -xvf - -C /tmp/deploy"
+              az container exec \
+                 --resource-group ProjectX-RG \
+                 --name projectx-qa \
+                 --exec-command "mkdir -p /tmp/deploy"
 
-        echo "=== Deploying WAR inside container ==="
-        az container exec \
-          --resource-group ProjectX-RG \
-          --name projectx-qa \
-          --exec-command "mv /tmp/deploy/*.war /usr/local/tomcat/webapps/ROOT.war"
+              cat webapp.tar | az container exec \
+                 --resource-group ProjectX-RG \
+                 --name projectx-qa \
+                 --exec-command "tar -xvf - -C /tmp/deploy"
 
-        echo "=== Restarting container ==="
-        az container restart \
-          --resource-group ProjectX-RG \
-          --name projectx-qa
-      displayName: "Deploy WAR to QA over TAR upload"
+              az container exec \
+                 --resource-group ProjectX-RG \
+                 --name projectx-qa \
+                 --exec-command "mv /tmp/deploy/*.war /usr/local/tomcat/webapps/ROOT.war"
 
-# ======================================================
-# DEPLOY TO PROD
-# ======================================================
+              az container restart \
+                 --resource-group ProjectX-RG \
+                 --name projectx-qa
+            displayName: "Deploy WAR to QA"
+
+# --------------------------------------------------------
+# DEPLOY PROD
+# --------------------------------------------------------
 - stage: DeployPROD
   displayName: "Deploy to PROD"
   dependsOn: DeployQA
-  environment: projectx-prod
+
   jobs:
-  - job: DeployToProd
-    displayName: "Deploy WAR to PROD"
-    steps:
+  - deployment: DeployToProd
+    displayName: "Deploy to PROD Container"
+    environment: projectx-prod
 
-    - download: current
-      artifact: warfiles
+    strategy:
+      runOnce:
+        deploy:
+          steps:
 
-    - script: |
-        echo "=== Extract WAR Path ==="
-        WAR=$(ls $(Pipeline.Workspace)/warfiles/*.war)
-        echo "WAR found at: $WAR"
+          - download: current
+            artifact: warfiles
 
-        echo "=== Creating TAR package ==="
-        tar -cvf webapp.tar -C $(Pipeline.Workspace)/warfiles $(basename $WAR)
+          - script: |
+              WAR=$(ls $(Pipeline.Workspace)/warfiles/*.war)
+              echo "WAR found: $WAR"
 
-        echo "=== Sending tar into PROD container ==="
-        az container exec \
-          --resource-group ProjectX-RG \
-          --name projectx-prod \
-          --exec-command "mkdir -p /tmp/deploy"
+              tar -cvf webapp.tar -C $(Pipeline.Workspace)/warfiles $(basename $WAR)
 
-        cat webapp.tar | az container exec \
-          --resource-group ProjectX-RG \
-          --name projectx-prod \
-          --exec-command "tar -xvf - -C /tmp/deploy"
+              az container exec \
+                 --resource-group ProjectX-RG \
+                 --name projectx-prod \
+                 --exec-command "mkdir -p /tmp/deploy"
 
-        echo "=== Deploying WAR inside container ==="
-        az container exec \
-          --resource-group ProjectX-RG \
-          --name projectx-prod \
-          --exec-command "mv /tmp/deploy/*.war /usr/local/tomcat/webapps/ROOT.war"
+              cat webapp.tar | az container exec \
+                 --resource-group ProjectX-RG \
+                 --name projectx-prod \
+                 --exec-command "tar -xvf - -C /tmp/deploy"
 
-        echo "=== Restarting container ==="
-        az container restart \
-          --resource-group ProjectX-RG \
-          --name projectx-prod
-      displayName: "Deploy WAR to PROD over TAR upload"
+              az container exec \
+                 --resource-group ProjectX-RG \
+                 --name projectx-prod \
+                 --exec-command "mv /tmp/deploy/*.war /usr/local/tomcat/webapps/ROOT.war"
+
+              az container restart \
+                 --resource-group ProjectX-RG \
+                 --name projectx-prod
+            displayName: "Deploy WAR to PROD"
