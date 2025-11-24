@@ -9,9 +9,9 @@ variables:
 
 stages:
 
-# ---------------------- #
-#        BUILD STAGE     #
-# ---------------------- #
+# -------------------------------------------------- #
+#                       BUILD                         #
+# -------------------------------------------------- #
 - stage: Build
   displayName: "Build Java WAR"
   jobs:
@@ -40,9 +40,10 @@ stages:
         publishLocation: 'Container'
 
 
-# ---------------------- #
-#      QA DEPLOY STAGE   #
-# ---------------------- #
+
+# -------------------------------------------------- #
+#                       QA DEPLOY                     #
+# -------------------------------------------------- #
 - stage: Deploy_QA
   displayName: "Deploy to QA Container"
   dependsOn: Build
@@ -58,35 +59,63 @@ stages:
             artifact: warfiles
 
           - script: |
-              echo "Encoding WAR as base64"
-              base64 warfiles/$(WAR_NAME) > war.b64
+              echo "=== LISTING DOWNLOADED ARTIFACTS ==="
+              ls -l "$(Pipeline.Workspace)/warfiles"
 
-              echo "Creating temp directory in container"
-              az container exec --resource-group ProjectX-RG --name projectx-qa --exec-command "mkdir -p /tmp/deploy"
+              WAR_PATH="$(Pipeline.Workspace)/warfiles/$(WAR_NAME)"
+              echo "WAR located at: $WAR_PATH"
 
-              echo "Copy WAR into QA container"
-              az container exec --resource-group ProjectX-RG --name projectx-qa --exec-command "sh -c 'base64 -d > /tmp/deploy/ROOT.war'" < war.b64
+              if [ ! -f "$WAR_PATH" ]; then
+                echo "ERROR: WAR file not found at $WAR_PATH"
+                exit 1
+              fi
 
-              echo "Move WAR into Tomcat webapps/"
-              az container exec --resource-group ProjectX-RG --name projectx-qa --exec-command "mv /tmp/deploy/ROOT.war /usr/local/tomcat/webapps/ROOT.war"
+              echo "=== ENCODING WAR AS BASE64 ==="
+              base64 "$WAR_PATH" > war.b64
 
-              echo "Restart QA container"
+              echo "=== CREATING TEMP DIRECTORY INSIDE QA CONTAINER ==="
+              az container exec \
+                --resource-group ProjectX-RG \
+                --name projectx-qa \
+                --exec-command "mkdir -p /tmp/deploy"
+
+              echo "=== UPLOADING BASE64 WAR INTO CONTAINER ==="
+              cat war.b64 | az container exec \
+                --resource-group ProjectX-RG \
+                --name projectx-qa \
+                --exec-command "sh -c 'cat > /tmp/deploy/ROOT.b64'"
+
+              echo "=== DECODING WAR INSIDE CONTAINER ==="
+              az container exec \
+                --resource-group ProjectX-RG \
+                --name projectx-qa \
+                --exec-command "base64 -d /tmp/deploy/ROOT.b64 > /tmp/deploy/ROOT.war"
+
+              echo "=== DEPLOYING WAR INTO TOMCAT WEBAPPS ==="
+              az container exec \
+                --resource-group ProjectX-RG \
+                --name projectx-qa \
+                --exec-command "mv /tmp/deploy/ROOT.war /usr/local/tomcat/webapps/ROOT.war"
+
+              echo "=== RESTARTING QA CONTAINER ==="
               az container restart --resource-group ProjectX-RG --name projectx-qa
 
+              echo "=== QA DEPLOYMENT COMPLETE ==="
             displayName: "Deploy WAR to QA"
 
 
-# ---------------------- #
-#   PROD DEPLOY STAGE    #
-#   (Manual Approval)    #
-# ---------------------- #
+
+# -------------------------------------------------- #
+#                      PROD DEPLOY                    #
+#     (Triggered AFTER manual approval in environment)#
+# -------------------------------------------------- #
 - stage: Deploy_Prod
   displayName: "Deploy to PROD Container"
   dependsOn: Deploy_QA
   jobs:
   - deployment: DeployProd
     displayName: "Production Deployment"
-    environment: "projectx-prod"   # <-- this is where approval is triggered!
+    environment: "projectx-prod"     # <-- THIS triggers manual approval!
     strategy:
       runOnce:
         deploy:
@@ -95,19 +124,46 @@ stages:
             artifact: warfiles
 
           - script: |
-              echo "Encoding WAR as base64"
-              base64 warfiles/$(WAR_NAME) > war.b64
+              echo "=== LISTING DOWNLOADED ARTIFACTS ==="
+              ls -l "$(Pipeline.Workspace)/warfiles"
 
-              echo "Creating temp directory in PROD container"
-              az container exec --resource-group ProjectX-RG --name projectx-prod --exec-command "mkdir -p /tmp/deploy"
+              WAR_PATH="$(Pipeline.Workspace)/warfiles/$(WAR_NAME)"
+              echo "WAR located at: $WAR_PATH"
 
-              echo "Copy WAR into PROD container"
-              az container exec --resource-group ProjectX-RG --name projectx-prod --exec-command "sh -c 'base64 -d > /tmp/deploy/ROOT.war'" < war.b64
+              if [ ! -f "$WAR_PATH" ]; then
+                echo "ERROR: WAR file not found at $WAR_PATH"
+                exit 1
+              fi
 
-              echo "Move WAR into Tomcat webapps/"
-              az container exec --resource-group ProjectX-RG --name projectx-prod --exec-command "mv /tmp/deploy/ROOT.war /usr/local/tomcat/webapps/ROOT.war"
+              echo "=== ENCODING WAR AS BASE64 ==="
+              base64 "$WAR_PATH" > war.b64
 
-              echo "Restart PROD container"
+              echo "=== CREATING TEMP DIRECTORY INSIDE PROD CONTAINER ==="
+              az container exec \
+                --resource-group ProjectX-RG \
+                --name projectx-prod \
+                --exec-command "mkdir -p /tmp/deploy"
+
+              echo "=== UPLOADING BASE64 WAR INTO CONTAINER ==="
+              cat war.b64 | az container exec \
+                --resource-group ProjectX-RG \
+                --name projectx-prod \
+                --exec-command "sh -c 'cat > /tmp/deploy/ROOT.b64'"
+
+              echo "=== DECODING WAR INSIDE CONTAINER ==="
+              az container exec \
+                --resource-group ProjectX-RG \
+                --name projectx-prod \
+                --exec-command "base64 -d /tmp/deploy/ROOT.b64 > /tmp/deploy/ROOT.war"
+
+              echo "=== DEPLOYING WAR INTO TOMCAT WEBAPPS ==="
+              az container exec \
+                --resource-group ProjectX-RG \
+                --name projectx-prod \
+                --exec-command "mv /tmp/deploy/ROOT.war /usr/local/tomcat/webapps/ROOT.war"
+
+              echo "=== RESTARTING PROD CONTAINER ==="
               az container restart --resource-group ProjectX-RG --name projectx-prod
 
+              echo "=== PROD DEPLOYMENT COMPLETE ==="
             displayName: "Deploy WAR to PROD"
