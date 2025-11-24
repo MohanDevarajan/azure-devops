@@ -8,9 +8,9 @@ variables:
   maven.opts: "-Dmaven.repo.local=$(Pipeline.Workspace)/.m2"
 
 stages:
-# ===========================
+# ==========================
 #        BUILD STAGE
-# ===========================
+# ==========================
 - stage: Build
   displayName: "Build and Package"
 
