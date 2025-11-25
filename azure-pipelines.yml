@@ -10,6 +10,7 @@ variables:
   RESOURCE_GROUP: "ProjectX-RG"
   QA_CONTAINER: "projectx-qa"
   PROD_CONTAINER: "projectx-prod"
+  ARTIFACT_NAME: "warfiles"
 
 stages:
 
@@ -20,9 +21,10 @@ stages:
   displayName: "Build WAR"
   jobs:
   - job: BuildJob
+    displayName: "Maven Build"
     steps:
     - task: Maven@3
-      displayName: "Build WAR using Maven"
+      displayName: "Maven: clean package"
       inputs:
         mavenPomFile: "pom.xml"
         goals: "clean package"
@@ -32,62 +34,92 @@ stages:
     - task: CopyFiles@2
       displayName: "Copy WAR to staging"
       inputs:
-        Contents: "target/*.war"
-        TargetFolder: "$(Build.ArtifactStagingDirectory)"
+        Contents: "webapp/target/*.war"
+        TargetFolder: "$(Build.ArtifactStagingDirectory)/$(ARTIFACT_NAME)"
 
     - task: PublishBuildArtifacts@1
       displayName: "Publish WAR artifact"
       inputs:
-        PathtoPublish: "$(Build.ArtifactStagingDirectory)"
-        ArtifactName: "warfiles"
+        PathtoPublish: "$(Build.ArtifactStagingDirectory)/$(ARTIFACT_NAME)"
+        ArtifactName: "$(ARTIFACT_NAME)"
         publishLocation: "Container"
 
+
 # ================================================================
-#                      DOCKER BUILD & PUSH
+#                DOCKER BUILD & PUSH (uses artifact)
 # ================================================================
 - stage: Docker
   displayName: "Build & Push Docker Image"
   dependsOn: Build
   jobs:
   - job: DockerJob
+    displayName: "Docker build"
     steps:
-    - download: current
-      artifact: warfiles
+
+    - task: DownloadPipelineArtifact@2
+      displayName: "Download WAR artifact"
+      inputs:
+        artifact: "$(ARTIFACT_NAME)"
+        path: "$(Pipeline.Workspace)/$(ARTIFACT_NAME)"
 
     - script: |
-        echo "=== Preparing Dockerfile and WAR ==="
-        cp "$(Pipeline.Workspace)/warfiles/webapp.war" .
-        cat > Dockerfile <<EOF
-        FROM tomcat:9.0
-        COPY webapp.war /usr/local/tomcat/webapps/ROOT.war
-        EOF
+        set -euo pipefail
+        echo "=== Locate WAR ==="
+        WAR_FILE=$(ls "$(Pipeline.Workspace)/$(ARTIFACT_NAME)"/*.war | head -n 1)
+        echo "Found WAR: $WAR_FILE"
 
-        echo "=== Building Docker image ==="
-        docker build -t "$(ACR_NAME).azurecr.io/$(IMAGE_NAME):$(Build.BuildId)" .
+        echo "=== Prepare workspace ==="
+        cp "$WAR_FILE" ./webapp.war
 
-        echo "=== Logging into ACR ==="
+        echo "=== Write Dockerfile ==="
+        cat > Dockerfile <<'DOCKER_EOF'
+FROM tomcat:9.0
+COPY webapp.war /usr/local/tomcat/webapps/ROOT.war
+DOCKER_EOF
+
+        echo "=== Login to ACR ==="
         az acr login --name "$(ACR_NAME)"
 
-        echo "=== Tagging image ==="
+        echo "=== Build image ==="
+        docker build -t "$(ACR_NAME).azurecr.io/$(IMAGE_NAME):$(Build.BuildId)" .
+
+        echo "=== Tag image as latest ==="
         docker tag "$(ACR_NAME).azurecr.io/$(IMAGE_NAME):$(Build.BuildId)" \
                    "$(ACR_NAME).azurecr.io/$(IMAGE_NAME):latest"
 
-        echo "=== Pushing image to ACR ==="
+        echo "=== Push images ==="
         docker push "$(ACR_NAME).azurecr.io/$(IMAGE_NAME):$(Build.BuildId)"
         docker push "$(ACR_NAME).azurecr.io/$(IMAGE_NAME):latest"
       displayName: "Build & Push Docker Image"
+      env:
+        # Ensure you set these variables in the pipeline library or pipeline variables
+        ACR_USERNAME: $(ACR_USERNAME)
+        ACR_PASSWORD: $(ACR_PASSWORD)
+
 
 # ================================================================
-#                      QA DEPLOYMENT STAGE
+#                      QA DEPLOYMENT (delete + create)
 # ================================================================
 - stage: Deploy_QA
   displayName: "Deploy to QA"
   dependsOn: Docker
   jobs:
   - job: QADeploy
+    displayName: "Deploy to QA ACI"
     steps:
     - script: |
-        echo "=== Deploying to QA ==="
+        set -euo pipefail
+        echo "=== Deploying to QA: $(QA_CONTAINER) ==="
+
+        # Try to delete the container if it exists (ignore error if it doesn't)
+        echo "Deleting existing container (if any)..."
+        az container delete --resource-group "$(RESOURCE_GROUP)" --name "$(QA_CONTAINER)" --yes || true
+
+        # Wait a few seconds for deletion to finish (if it was present)
+        echo "Waiting for deletion to settle..."
+        sleep 6
+
+        echo "Creating container in QA..."
         az container create \
           --resource-group "$(RESOURCE_GROUP)" \
           --name "$(QA_CONTAINER)" \
@@ -96,20 +128,50 @@ stages:
           --registry-username "$(ACR_USERNAME)" \
           --registry-password "$(ACR_PASSWORD)" \
           --restart-policy Always \
-          --ports 8080
-      displayName: "Deploy to QA ACI"
+          --ports 8080 \
+          --cpu 1 --memory 1.5
+      displayName: "Create QA ACI (delete-if-exists prior)"
+      env:
+        ACR_USERNAME: $(ACR_USERNAME)
+        ACR_PASSWORD: $(ACR_PASSWORD)
 
 # ================================================================
-#                      PROD DEPLOYMENT STAGE
+#                Manual approval before Prod (optional)
+# ================================================================
+- stage: ApprovalGate
+  displayName: "Manual approval before PROD"
+  dependsOn: Deploy_QA
+  jobs:
+  - job: WaitForApproval
+    pool: server
+    steps:
+    - task: ManualValidation@0
+      displayName: "Approve deployment to PROD"
+      inputs:
+        instructions: "Please verify QA and approve deployment to PROD."
+        onTimeout: "reject"
+
+# ================================================================
+#                      PROD DEPLOYMENT (delete + create)
 # ================================================================
 - stage: Deploy_Prod
   displayName: "Deploy to PROD"
-  dependsOn: Deploy_QA
+  dependsOn: ApprovalGate
   jobs:
   - job: ProdDeploy
+    displayName: "Deploy to PROD ACI"
     steps:
     - script: |
-        echo "=== Deploying to PROD ==="
+        set -euo pipefail
+        echo "=== Deploying to PROD: $(PROD_CONTAINER) ==="
+
+        echo "Delete existing PROD container (if any)..."
+        az container delete --resource-group "$(RESOURCE_GROUP)" --name "$(PROD_CONTAINER)" --yes || true
+
+        echo "Waiting for deletion to settle..."
+        sleep 6
+
+        echo "Creating container in PROD..."
         az container create \
           --resource-group "$(RESOURCE_GROUP)" \
           --name "$(PROD_CONTAINER)" \
@@ -118,5 +180,9 @@ stages:
           --registry-username "$(ACR_USERNAME)" \
           --registry-password "$(ACR_PASSWORD)" \
           --restart-policy Always \
-          --ports 8080
-      displayName: "Deploy to PROD ACI"
+          --ports 8080 \
+          --cpu 1 --memory 1.5
+      displayName: "Create PROD ACI (delete-if-exists prior)"
+      env:
+        ACR_USERNAME: $(ACR_USERNAME)
+        ACR_PASSWORD: $(ACR_PASSWORD)
