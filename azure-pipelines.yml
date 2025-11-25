@@ -40,7 +40,7 @@ stages:
       inputs:
         PathtoPublish: "$(Build.ArtifactStagingDirectory)"
         ArtifactName: "warfiles"
-        publishLocation: "Container"
+        publishLocation: Container
 
 # ================================================================
 #                DOCKER BUILD & PUSH
@@ -76,7 +76,7 @@ stages:
       displayName: "Build & Push Docker Image"
 
 # ================================================================
-#                      QA DEPLOYMENT
+#                   QA DEPLOYMENT (UPDATE ONLY)
 # ================================================================
 - stage: Deploy_QA
   displayName: "Deploy to QA"
@@ -85,20 +85,32 @@ stages:
   - job: QADeploy
     steps:
     - script: |
-        echo "=== Deploying to QA ==="
-        az container create \
+        echo "=== Updating QA ACI Container ==="
+
+        echo "Stopping existing container..."
+        az container stop \
+          --resource-group "$(RESOURCE_GROUP)" \
+          --name "$(QA_CONTAINER)" || true
+
+        echo "Updating container with new image..."
+        az container update \
           --resource-group "$(RESOURCE_GROUP)" \
           --name "$(QA_CONTAINER)" \
           --image "$(ACR_NAME).azurecr.io/$(IMAGE_NAME):$(Build.BuildId)" \
+          --cpu 1 \
+          --memory 1.5 \
           --registry-login-server "$(ACR_NAME).azurecr.io" \
           --registry-username "$(ACR_USERNAME)" \
-          --registry-password "$(ACR_PASSWORD)" \
-          --restart-policy Always \
-          --ports 8080
-      displayName: "Deploy to QA ACI"
+          --registry-password "$(ACR_PASSWORD)"
+
+        echo "Starting container again..."
+        az container start \
+          --resource-group "$(RESOURCE_GROUP)" \
+          --name "$(QA_CONTAINER)"
+      displayName: "Update QA ACI"
 
 # ================================================================
-#                      PROD DEPLOYMENT
+#                   PROD DEPLOYMENT (UPDATE ONLY)
 # ================================================================
 - stage: Deploy_Prod
   displayName: "Deploy to PROD"
@@ -107,14 +119,26 @@ stages:
   - job: ProdDeploy
     steps:
     - script: |
-        echo "=== Deploying to PROD ==="
-        az container create \
+        echo "=== Updating PROD ACI Container ==="
+
+        echo "Stopping existing container..."
+        az container stop \
+          --resource-group "$(RESOURCE_GROUP)" \
+          --name "$(PROD_CONTAINER)" || true
+
+        echo "Updating container with new image..."
+        az container update \
           --resource-group "$(RESOURCE_GROUP)" \
           --name "$(PROD_CONTAINER)" \
           --image "$(ACR_NAME).azurecr.io/$(IMAGE_NAME):$(Build.BuildId)" \
+          --cpu 1 \
+          --memory 1.5 \
           --registry-login-server "$(ACR_NAME).azurecr.io" \
           --registry-username "$(ACR_USERNAME)" \
-          --registry-password "$(ACR_PASSWORD)" \
-          --restart-policy Always \
-          --ports 8080
-      displayName: "Deploy to PROD ACI"
+          --registry-password "$(ACR_PASSWORD)"
+
+        echo "Starting container again..."
+        az container start \
+          --resource-group "$(RESOURCE_GROUP)" \
+          --name "$(PROD_CONTAINER)"
+      displayName: "Update PROD ACI"
