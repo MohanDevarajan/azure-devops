@@ -45,8 +45,6 @@ stages:
         ArtifactName: "warfiles"
         publishLocation: "Container"
 
----
-
 # ================================================================
 #          DOCKER BUILD & PUSH
 # ================================================================
@@ -61,14 +59,11 @@ stages:
 
     - script: |
         echo "=== Preparing Dockerfile and WAR ==="
-        # Assuming the WAR file name is "webapp.war" based on the copy/publish step
-        # If your Maven build outputs a different name, adjust the name below.
+        # Copy WAR file from artifact
         find "$(Pipeline.Workspace)/warfiles" -name "*.war" -exec cp {} . \;
-        
-        # Determine the name of the copied WAR file for use in the Dockerfile
+
         WAR_FILE_NAME=$(find . -maxdepth 1 -name "*.war" | head -n 1 | xargs basename)
-        
-        # Dynamically create Dockerfile
+
         cat > Dockerfile <<EOF
         FROM tomcat:9.0
         COPY $WAR_FILE_NAME /usr/local/tomcat/webapps/ROOT.war
@@ -77,26 +72,19 @@ stages:
         echo "=== Building Docker image ==="
         docker build -t "$(ACR_NAME).azurecr.io/$(IMAGE_NAME):$(Build.BuildId)" .
 
-        # NOTE: You should ensure 'az login' or a service principal configuration 
-        # is performed before 'az acr login' on a self-hosted agent if it's 
-        # not already configured. For simplicity, we assume 'az acr login' 
-        # is authenticated via existing credentials or permissions.
         echo "=== Logging into ACR ==="
         az acr login --name "$(ACR_NAME)"
 
         echo "=== Tagging image ==="
-        docker tag "$(ACR_NAME).azurecr.io/$(IMAGE_NAME):$(Build.BuildId)" \
-                     "$(ACR_NAME).azurecr.io/$(IMAGE_NAME):latest"
+        docker tag "$(ACR_NAME).azurecr.io/$(IMAGE_NAME):$(Build.BuildId)" "$(ACR_NAME).azurecr.io/$(IMAGE_NAME):latest"
 
         echo "=== Pushing image to ACR ==="
         docker push "$(ACR_NAME).azurecr.io/$(IMAGE_NAME):$(Build.BuildId)"
         docker push "$(ACR_NAME).azurecr.io/$(IMAGE_NAME):latest"
       displayName: "Build & Push Docker Image"
 
----
-
 # ================================================================
-#          QA DEPLOYMENT STAGE (FIXED)
+#          QA DEPLOYMENT STAGE
 # ================================================================
 - stage: Deploy_QA
   displayName: "Deploy to QA"
@@ -106,7 +94,6 @@ stages:
     steps:
     - script: |
         echo "=== Deploying to QA ==="
-        # FIX: Added '\' for line continuation to resolve the unclosed quote error.
         az container create \
           --resource-group "$(RESOURCE_GROUP)" \
           --name "$(QA_CONTAINER)" \
@@ -118,10 +105,8 @@ stages:
           --ports 8080
       displayName: "Deploy to QA ACI"
 
----
-
 # ================================================================
-#          PROD DEPLOYMENT STAGE (FIXED)
+#          PROD DEPLOYMENT STAGE
 # ================================================================
 - stage: Deploy_Prod
   displayName: "Deploy to PROD"
@@ -131,7 +116,6 @@ stages:
     steps:
     - script: |
         echo "=== Deploying to PROD ==="
-        # FIX: Added '\' for line continuation to resolve the unclosed quote error.
         az container create \
           --resource-group "$(RESOURCE_GROUP)" \
           --name "$(PROD_CONTAINER)" \
