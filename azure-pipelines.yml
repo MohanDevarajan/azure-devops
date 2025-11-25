@@ -21,8 +21,6 @@ stages:
   jobs:
   - job: BuildJob
     steps:
-
-    # --- Build multi-module Maven project ---
     - task: Maven@3
       displayName: "Build WAR using Maven"
       inputs:
@@ -31,14 +29,12 @@ stages:
         javaHomeOption: "Path"
         jdkDirectory: "/usr/lib/jvm/java-17-openjdk-amd64"
 
-    # --- Copy WAR from webapp module ---
     - task: CopyFiles@2
       displayName: "Copy WAR to staging"
       inputs:
-        Contents: "webapp/target/*.war"
+        Contents: "target/*.war"
         TargetFolder: "$(Build.ArtifactStagingDirectory)"
 
-    # --- Publish the WAR artifact ---
     - task: PublishBuildArtifacts@1
       displayName: "Publish WAR artifact"
       inputs:
@@ -47,7 +43,7 @@ stages:
         publishLocation: "Container"
 
 # ================================================================
-#                   DOCKER BUILD & PUSH IMAGE
+#                      DOCKER BUILD & PUSH
 # ================================================================
 - stage: Docker
   displayName: "Build & Push Docker Image"
@@ -55,38 +51,34 @@ stages:
   jobs:
   - job: DockerJob
     steps:
-
     - download: current
       artifact: warfiles
 
     - script: |
-        echo "=== Preparing WAR & Dockerfile ==="
-        # Copy WAR and rename consistently
-        cp "$(Pipeline.Workspace)/warfiles/"*.war ./webapp.war
-
-        # Create Dockerfile
+        echo "=== Preparing Dockerfile and WAR ==="
+        cp "$(Pipeline.Workspace)/warfiles/webapp.war" .
         cat > Dockerfile <<EOF
-FROM tomcat:9.0
-COPY webapp.war /usr/local/tomcat/webapps/ROOT.war
-EOF
-
-        echo "=== Logging into ACR ==="
-        az acr login --name "$(ACR_NAME)"
+        FROM tomcat:9.0
+        COPY webapp.war /usr/local/tomcat/webapps/ROOT.war
+        EOF
 
         echo "=== Building Docker image ==="
         docker build -t "$(ACR_NAME).azurecr.io/$(IMAGE_NAME):$(Build.BuildId)" .
+
+        echo "=== Logging into ACR ==="
+        az acr login --name "$(ACR_NAME)"
 
         echo "=== Tagging image ==="
         docker tag "$(ACR_NAME).azurecr.io/$(IMAGE_NAME):$(Build.BuildId)" \
                    "$(ACR_NAME).azurecr.io/$(IMAGE_NAME):latest"
 
-        echo "=== Pushing to ACR ==="
+        echo "=== Pushing image to ACR ==="
         docker push "$(ACR_NAME).azurecr.io/$(IMAGE_NAME):$(Build.BuildId)"
         docker push "$(ACR_NAME).azurecr.io/$(IMAGE_NAME):latest"
-      displayName: "Docker Build & Push"
+      displayName: "Build & Push Docker Image"
 
 # ================================================================
-#                        QA DEPLOYMENT STAGE
+#                      QA DEPLOYMENT STAGE
 # ================================================================
 - stage: Deploy_QA
   displayName: "Deploy to QA"
@@ -95,8 +87,7 @@ EOF
   - job: QADeploy
     steps:
     - script: |
-        echo "=== Deploying to QA ACI ==="
-
+        echo "=== Deploying to QA ==="
         az container create \
           --resource-group "$(RESOURCE_GROUP)" \
           --name "$(QA_CONTAINER)" \
@@ -105,13 +96,11 @@ EOF
           --registry-username "$(ACR_USERNAME)" \
           --registry-password "$(ACR_PASSWORD)" \
           --restart-policy Always \
-          --ports 8080 \
-          --cpu 1 --memory 1.5
-
-      displayName: "Deploy QA"
+          --ports 8080
+      displayName: "Deploy to QA ACI"
 
 # ================================================================
-#                        PROD DEPLOYMENT STAGE
+#                      PROD DEPLOYMENT STAGE
 # ================================================================
 - stage: Deploy_Prod
   displayName: "Deploy to PROD"
@@ -120,8 +109,7 @@ EOF
   - job: ProdDeploy
     steps:
     - script: |
-        echo "=== Deploying to PROD ACI ==="
-
+        echo "=== Deploying to PROD ==="
         az container create \
           --resource-group "$(RESOURCE_GROUP)" \
           --name "$(PROD_CONTAINER)" \
@@ -130,7 +118,5 @@ EOF
           --registry-username "$(ACR_USERNAME)" \
           --registry-password "$(ACR_PASSWORD)" \
           --restart-policy Always \
-          --ports 8080 \
-          --cpu 1 --memory 1.5
-
-      displayName: "Deploy PROD"
+          --ports 8080
+      displayName: "Deploy to PROD ACI"
