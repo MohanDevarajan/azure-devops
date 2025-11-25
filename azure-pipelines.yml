@@ -35,13 +35,13 @@ stages:
       displayName: "Copy WAR to staging"
       inputs:
         Contents: "webapp/target/*.war"
-        TargetFolder: "$(Build.ArtifactStagingDirectory)/$(ARTIFACT_NAME)"
+        TargetFolder: "$(Build.ArtifactStagingDirectory)/warfiles"
 
     - task: PublishBuildArtifacts@1
       displayName: "Publish WAR artifact"
       inputs:
-        PathtoPublish: "$(Build.ArtifactStagingDirectory)/$(ARTIFACT_NAME)"
-        ArtifactName: "$(ARTIFACT_NAME)"
+        PathtoPublish: "$(Build.ArtifactStagingDirectory)/warfiles"
+        ArtifactName: "warfiles"
         publishLocation: "Container"
 
 
@@ -59,13 +59,13 @@ stages:
     - task: DownloadPipelineArtifact@2
       displayName: "Download WAR artifact"
       inputs:
-        artifact: "$(ARTIFACT_NAME)"
-        path: "$(Pipeline.Workspace)/$(ARTIFACT_NAME)"
+        artifact: "warfiles"
+        path: "$(Pipeline.Workspace)/warfiles"
 
     - script: |
         set -euo pipefail
         echo "=== Locate WAR ==="
-        WAR_FILE=$(ls "$(Pipeline.Workspace)/$(ARTIFACT_NAME)"/*.war | head -n 1)
+        WAR_FILE=$(ls "$(Pipeline.Workspace)/warfiles"/*.war | head -n 1)
         echo "Found WAR: $WAR_FILE"
 
         echo "=== Prepare workspace ==="
@@ -92,7 +92,6 @@ DOCKER_EOF
         docker push "$(ACR_NAME).azurecr.io/$(IMAGE_NAME):latest"
       displayName: "Build & Push Docker Image"
       env:
-        # Ensure you set these variables in the pipeline library or pipeline variables
         ACR_USERNAME: $(ACR_USERNAME)
         ACR_PASSWORD: $(ACR_PASSWORD)
 
@@ -111,15 +110,12 @@ DOCKER_EOF
         set -euo pipefail
         echo "=== Deploying to QA: $(QA_CONTAINER) ==="
 
-        # Try to delete the container if it exists (ignore error if it doesn't)
-        echo "Deleting existing container (if any)..."
+        echo "Deleting existing container..."
         az container delete --resource-group "$(RESOURCE_GROUP)" --name "$(QA_CONTAINER)" --yes || true
 
-        # Wait a few seconds for deletion to finish (if it was present)
-        echo "Waiting for deletion to settle..."
         sleep 6
 
-        echo "Creating container in QA..."
+        echo "Creating QA container..."
         az container create \
           --resource-group "$(RESOURCE_GROUP)" \
           --name "$(QA_CONTAINER)" \
@@ -130,13 +126,14 @@ DOCKER_EOF
           --restart-policy Always \
           --ports 8080 \
           --cpu 1 --memory 1.5
-      displayName: "Create QA ACI (delete-if-exists prior)"
+      displayName: "Create QA ACI"
       env:
         ACR_USERNAME: $(ACR_USERNAME)
         ACR_PASSWORD: $(ACR_PASSWORD)
 
+
 # ================================================================
-#                Manual approval before Prod (optional)
+#                Manual approval before Prod
 # ================================================================
 - stage: ApprovalGate
   displayName: "Manual approval before PROD"
@@ -151,8 +148,9 @@ DOCKER_EOF
         instructions: "Please verify QA and approve deployment to PROD."
         onTimeout: "reject"
 
+
 # ================================================================
-#                      PROD DEPLOYMENT (delete + create)
+#                      PROD DEPLOYMENT
 # ================================================================
 - stage: Deploy_Prod
   displayName: "Deploy to PROD"
@@ -165,13 +163,12 @@ DOCKER_EOF
         set -euo pipefail
         echo "=== Deploying to PROD: $(PROD_CONTAINER) ==="
 
-        echo "Delete existing PROD container (if any)..."
+        echo "Deleting existing PROD container..."
         az container delete --resource-group "$(RESOURCE_GROUP)" --name "$(PROD_CONTAINER)" --yes || true
 
-        echo "Waiting for deletion to settle..."
         sleep 6
 
-        echo "Creating container in PROD..."
+        echo "Creating PROD container..."
         az container create \
           --resource-group "$(RESOURCE_GROUP)" \
           --name "$(PROD_CONTAINER)" \
@@ -182,7 +179,7 @@ DOCKER_EOF
           --restart-policy Always \
           --ports 8080 \
           --cpu 1 --memory 1.5
-      displayName: "Create PROD ACI (delete-if-exists prior)"
+      displayName: "Create PROD ACI"
       env:
         ACR_USERNAME: $(ACR_USERNAME)
         ACR_PASSWORD: $(ACR_PASSWORD)
