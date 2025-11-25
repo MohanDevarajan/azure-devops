@@ -21,6 +21,8 @@ stages:
   jobs:
   - job: BuildJob
     steps:
+
+    # --- Build multi-module Maven project ---
     - task: Maven@3
       displayName: "Build WAR using Maven"
       inputs:
@@ -29,12 +31,14 @@ stages:
         javaHomeOption: "Path"
         jdkDirectory: "/usr/lib/jvm/java-17-openjdk-amd64"
 
+    # --- Copy WAR from webapp module ---
     - task: CopyFiles@2
       displayName: "Copy WAR to staging"
       inputs:
         Contents: "webapp/target/*.war"
         TargetFolder: "$(Build.ArtifactStagingDirectory)"
 
+    # --- Publish the WAR artifact ---
     - task: PublishBuildArtifacts@1
       displayName: "Publish WAR artifact"
       inputs:
@@ -43,7 +47,7 @@ stages:
         publishLocation: "Container"
 
 # ================================================================
-#                DOCKER BUILD & PUSH
+#                   DOCKER BUILD & PUSH IMAGE
 # ================================================================
 - stage: Docker
   displayName: "Build & Push Docker Image"
@@ -51,34 +55,38 @@ stages:
   jobs:
   - job: DockerJob
     steps:
+
     - download: current
       artifact: warfiles
 
     - script: |
-        echo "Preparing Dockerfile..."
-        cp "$(Pipeline.Workspace)/warfiles/webapp.war" ./webapp.war
+        echo "=== Preparing WAR & Dockerfile ==="
+        # Copy WAR and rename consistently
+        cp "$(Pipeline.Workspace)/warfiles/"*.war ./webapp.war
 
-        cat <<EOF > Dockerfile
-        FROM tomcat:9.0
-        COPY webapp.war /usr/local/tomcat/webapps/ROOT.war
-        EOF
+        # Create Dockerfile
+        cat > Dockerfile <<EOF
+FROM tomcat:9.0
+COPY webapp.war /usr/local/tomcat/webapps/ROOT.war
+EOF
 
-        echo "Building Docker image..."
-        docker build -t "$(ACR_NAME).azurecr.io/$(IMAGE_NAME):$(Build.BuildId)" .
-
-        echo "Login to ACR..."
+        echo "=== Logging into ACR ==="
         az acr login --name "$(ACR_NAME)"
 
-        docker tag "$(ACR_NAME).azurecr.io/$(IMAGE_NAME):$(Build.BuildId)" \
-                    "$(ACR_NAME).azurecr.io/$(IMAGE_NAME):latest"
+        echo "=== Building Docker image ==="
+        docker build -t "$(ACR_NAME).azurecr.io/$(IMAGE_NAME):$(Build.BuildId)" .
 
-        echo "Pushing image..."
+        echo "=== Tagging image ==="
+        docker tag "$(ACR_NAME).azurecr.io/$(IMAGE_NAME):$(Build.BuildId)" \
+                   "$(ACR_NAME).azurecr.io/$(IMAGE_NAME):latest"
+
+        echo "=== Pushing to ACR ==="
         docker push "$(ACR_NAME).azurecr.io/$(IMAGE_NAME):$(Build.BuildId)"
         docker push "$(ACR_NAME).azurecr.io/$(IMAGE_NAME):latest"
-      displayName: "Build & Push Docker Image"
+      displayName: "Docker Build & Push"
 
 # ================================================================
-#                      QA DEPLOYMENT
+#                        QA DEPLOYMENT STAGE
 # ================================================================
 - stage: Deploy_QA
   displayName: "Deploy to QA"
@@ -87,7 +95,8 @@ stages:
   - job: QADeploy
     steps:
     - script: |
-        echo "Deploying to QA..."
+        echo "=== Deploying to QA ACI ==="
+
         az container create \
           --resource-group "$(RESOURCE_GROUP)" \
           --name "$(QA_CONTAINER)" \
@@ -96,11 +105,13 @@ stages:
           --registry-username "$(ACR_USERNAME)" \
           --registry-password "$(ACR_PASSWORD)" \
           --restart-policy Always \
-          --ports 8080
-      displayName: "Deploy to QA ACI"
+          --ports 8080 \
+          --cpu 1 --memory 1.5
+
+      displayName: "Deploy QA"
 
 # ================================================================
-#                     PROD DEPLOYMENT
+#                        PROD DEPLOYMENT STAGE
 # ================================================================
 - stage: Deploy_Prod
   displayName: "Deploy to PROD"
@@ -109,7 +120,8 @@ stages:
   - job: ProdDeploy
     steps:
     - script: |
-        echo "Deploying to PROD..."
+        echo "=== Deploying to PROD ACI ==="
+
         az container create \
           --resource-group "$(RESOURCE_GROUP)" \
           --name "$(PROD_CONTAINER)" \
@@ -118,5 +130,7 @@ stages:
           --registry-username "$(ACR_USERNAME)" \
           --registry-password "$(ACR_PASSWORD)" \
           --restart-policy Always \
-          --ports 8080
-      displayName: "Deploy to PROD ACI"
+          --ports 8080 \
+          --cpu 1 --memory 1.5
+
+      displayName: "Deploy PROD"
