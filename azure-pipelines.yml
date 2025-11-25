@@ -55,15 +55,13 @@ stages:
       artifact: warfiles
 
     - script: |
-        echo "=== Preparing Dockerfile and WAR ==="
+        echo "=== Preparing WAR and Dockerfile ==="
         cp $(Pipeline.Workspace)/warfiles/*.war .
 
         WAR_FILE_NAME=$(ls *.war)
 
-cat > Dockerfile <<'EOF'
-FROM tomcat:9.0
-COPY ${WAR_FILE_NAME} /usr/local/tomcat/webapps/ROOT.war
-EOF
+        echo "FROM tomcat:9.0" > Dockerfile
+        echo "COPY ${WAR_FILE_NAME} /usr/local/tomcat/webapps/ROOT.war" >> Dockerfile
 
         echo "=== Building Docker image ==="
         docker build -t "$(ACR_NAME).azurecr.io/$(IMAGE_NAME):$(Build.BuildId)" .
