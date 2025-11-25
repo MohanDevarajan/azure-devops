@@ -40,10 +40,11 @@ stages:
       inputs:
         PathtoPublish: "$(Build.ArtifactStagingDirectory)"
         ArtifactName: "warfiles"
-        publishLocation: Container
+        publishLocation: "Container"
+
 
 # ================================================================
-#                DOCKER BUILD & PUSH
+#                DOCKER BUILD & PUSH STAGE
 # ================================================================
 - stage: Docker
   displayName: "Build & Push Docker Image"
@@ -69,14 +70,17 @@ stages:
         echo "=== Logging into ACR ==="
         az acr login --name "$(ACR_NAME)"
 
-        echo "=== Tagging & Pushing Image ==="
-        docker tag "$(ACR_NAME).azurecr.io/$(IMAGE_NAME):$(Build.BuildId)" "$(ACR_NAME).azurecr.io/$(IMAGE_NAME):latest"
+        echo "=== Pushing image ==="
+        docker tag "$(ACR_NAME).azurecr.io/$(IMAGE_NAME):$(Build.BuildId)" \
+                   "$(ACR_NAME).azurecr.io/$(IMAGE_NAME):latest"
+
         docker push "$(ACR_NAME).azurecr.io/$(IMAGE_NAME):$(Build.BuildId)"
         docker push "$(ACR_NAME).azurecr.io/$(IMAGE_NAME):latest"
       displayName: "Build & Push Docker Image"
 
+
 # ================================================================
-#                   QA DEPLOYMENT (UPDATE ONLY)
+#                      QA DEPLOYMENT (DELETE + RECREATE)
 # ================================================================
 - stage: Deploy_QA
   displayName: "Deploy to QA"
@@ -85,32 +89,35 @@ stages:
   - job: QADeploy
     steps:
     - script: |
-        echo "=== Updating QA ACI Container ==="
+        echo "=== Recreating QA Container ==="
 
-        echo "Stopping existing container..."
-        az container stop \
+        echo "Deleting old container if exists..."
+        az container delete \
+          --yes \
           --resource-group "$(RESOURCE_GROUP)" \
           --name "$(QA_CONTAINER)" || true
 
-        echo "Updating container with new image..."
-        az container update \
+        echo "Creating new QA container..."
+        az container create \
           --resource-group "$(RESOURCE_GROUP)" \
           --name "$(QA_CONTAINER)" \
           --image "$(ACR_NAME).azurecr.io/$(IMAGE_NAME):$(Build.BuildId)" \
-          --cpu 1 \
-          --memory 1.5 \
           --registry-login-server "$(ACR_NAME).azurecr.io" \
           --registry-username "$(ACR_USERNAME)" \
-          --registry-password "$(ACR_PASSWORD)"
+          --registry-password "$(ACR_PASSWORD)" \
+          --os-type Linux \
+          --cpu 1 \
+          --memory 1.5 \
+          --ports 8080 \
+          --ip-address Public \
+          --restart-policy Always
 
-        echo "Starting container again..."
-        az container start \
-          --resource-group "$(RESOURCE_GROUP)" \
-          --name "$(QA_CONTAINER)"
-      displayName: "Update QA ACI"
+        echo "QA Deployment complete."
+      displayName: "Deploy to QA ACI"
+
 
 # ================================================================
-#                   PROD DEPLOYMENT (UPDATE ONLY)
+#                      PROD DEPLOYMENT (DELETE + RECREATE)
 # ================================================================
 - stage: Deploy_Prod
   displayName: "Deploy to PROD"
@@ -119,26 +126,26 @@ stages:
   - job: ProdDeploy
     steps:
     - script: |
-        echo "=== Updating PROD ACI Container ==="
+        echo "=== Recreating PROD Container ==="
 
-        echo "Stopping existing container..."
-        az container stop \
+        az container delete \
+          --yes \
           --resource-group "$(RESOURCE_GROUP)" \
           --name "$(PROD_CONTAINER)" || true
 
-        echo "Updating container with new image..."
-        az container update \
+        az container create \
           --resource-group "$(RESOURCE_GROUP)" \
           --name "$(PROD_CONTAINER)" \
           --image "$(ACR_NAME).azurecr.io/$(IMAGE_NAME):$(Build.BuildId)" \
-          --cpu 1 \
-          --memory 1.5 \
           --registry-login-server "$(ACR_NAME).azurecr.io" \
           --registry-username "$(ACR_USERNAME)" \
-          --registry-password "$(ACR_PASSWORD)"
+          --registry-password "$(ACR_PASSWORD)" \
+          --os-type Linux \
+          --cpu 1 \
+          --memory 1.5 \
+          --ports 8080 \
+          --ip-address Public \
+          --restart-policy Always
 
-        echo "Starting container again..."
-        az container start \
-          --resource-group "$(RESOURCE_GROUP)" \
-          --name "$(PROD_CONTAINER)"
-      displayName: "Update PROD ACI"
+        echo "PROD Deployment complete."
+      displayName: "Deploy to PROD ACI"
