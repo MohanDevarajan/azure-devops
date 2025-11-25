@@ -11,11 +11,11 @@ variables:
   QA_CONTAINER: "projectx-qa"
   PROD_CONTAINER: "projectx-prod"
 
+# =====================================================================
+#                              BUILD STAGE
+# =====================================================================
 stages:
 
-# ================================================================
-#                      BUILD STAGE
-# ================================================================
 - stage: Build
   displayName: "Build WAR"
   jobs:
@@ -43,12 +43,13 @@ stages:
         publishLocation: "Container"
 
 
-# ================================================================
-#                DOCKER BUILD & PUSH STAGE
-# ================================================================
+# =====================================================================
+#                        DOCKER BUILD & PUSH
+# =====================================================================
 - stage: Docker
   displayName: "Build & Push Docker Image"
   dependsOn: Build
+
   jobs:
   - job: DockerJob
     steps:
@@ -70,7 +71,7 @@ stages:
         echo "=== Logging into ACR ==="
         az acr login --name "$(ACR_NAME)"
 
-        echo "=== Pushing image ==="
+        echo "=== Tagging & Pushing Image ==="
         docker tag "$(ACR_NAME).azurecr.io/$(IMAGE_NAME):$(Build.BuildId)" \
                    "$(ACR_NAME).azurecr.io/$(IMAGE_NAME):latest"
 
@@ -79,73 +80,161 @@ stages:
       displayName: "Build & Push Docker Image"
 
 
-# ================================================================
-#                      QA DEPLOYMENT (DELETE + RECREATE)
-# ================================================================
+# =====================================================================
+#                        QA DEPLOYMENT (ENVIRONMENT)
+# =====================================================================
 - stage: Deploy_QA
   displayName: "Deploy to QA"
   dependsOn: Docker
+
   jobs:
-  - job: QADeploy
-    steps:
-    - script: |
-        echo "=== Recreating QA Container ==="
+  - deployment: QADeploy
+    displayName: "Deploy to QA ACI"
+    environment: "projectx-qa"
 
-        echo "Deleting old container if exists..."
-        az container delete \
-          --yes \
-          --resource-group "$(RESOURCE_GROUP)" \
-          --name "$(QA_CONTAINER)" || true
+    strategy:
+      runOnce:
+        deploy:
+          steps:
 
-        echo "Creating new QA container..."
-        az container create \
-          --resource-group "$(RESOURCE_GROUP)" \
-          --name "$(QA_CONTAINER)" \
-          --image "$(ACR_NAME).azurecr.io/$(IMAGE_NAME):$(Build.BuildId)" \
-          --registry-login-server "$(ACR_NAME).azurecr.io" \
-          --registry-username "$(ACR_USERNAME)" \
-          --registry-password "$(ACR_PASSWORD)" \
-          --os-type Linux \
-          --cpu 1 \
-          --memory 1.5 \
-          --ports 8080 \
-          --ip-address Public \
-          --restart-policy Always
+          # ------------------------------
+          # Delete old container
+          # ------------------------------
+          - script: |
+              echo "=== Deleting Existing QA Container ==="
+              az container delete \
+                --resource-group "$(RESOURCE_GROUP)" \
+                --name "$(QA_CONTAINER)" \
+                --yes
+            displayName: "Delete Old QA Container"
 
-        echo "QA Deployment complete."
-      displayName: "Deploy to QA ACI"
+          # ------------------------------
+          # Create fresh container
+          # ------------------------------
+          - script: |
+              echo "=== Deploying NEW QA Container ==="
+
+              az container create \
+                --resource-group "$(RESOURCE_GROUP)" \
+                --name "$(QA_CONTAINER)" \
+                --image "$(ACR_NAME).azurecr.io/$(IMAGE_NAME):$(Build.BuildId)" \
+                --registry-login-server "$(ACR_NAME).azurecr.io" \
+                --registry-username "$(ACR_USERNAME)" \
+                --registry-password "$(ACR_PASSWORD)" \
+                --restart-policy Always \
+                --os-type Linux \
+                --cpu 1 \
+                --memory 1.5 \
+                --ports 8080 \
+                --ip-address Public
+
+              QA_IP=$(az container show \
+                        --resource-group "$(RESOURCE_GROUP)" \
+                        --name "$(QA_CONTAINER)" \
+                        --query "ipAddress.ip" -o tsv)
+
+              echo "##vso[task.setvariable variable=QA_URL]http://$QA_IP:8080"
+              echo "QA URL = http://$QA_IP:8080"
+            displayName: "Create QA Container"
+
+          # ------------------------------
+          # Notify QA deploy success
+          # ------------------------------
+          - script: |
+              echo "QA deployment completed successfully: $(QA_URL)"
+            displayName: "Post Deployment Notification"
 
 
-# ================================================================
-#                      PROD DEPLOYMENT (DELETE + RECREATE)
-# ================================================================
+# =====================================================================
+#                      MANUAL APPROVAL → PROD  
+# =====================================================================
+
+# Add approval in UI:
+# Pipelines → Environments → projectx-prod → Approvals & checks → Add Approval
+
+# =====================================================================
+#                        PROD DEPLOYMENT (ENVIRONMENT)
+# =====================================================================
 - stage: Deploy_Prod
   displayName: "Deploy to PROD"
   dependsOn: Deploy_QA
+
   jobs:
-  - job: ProdDeploy
-    steps:
-    - script: |
-        echo "=== Recreating PROD Container ==="
+  - deployment: ProdDeploy
+    displayName: "Deploy to PROD ACI"
+    environment: "projectx-prod"
 
-        az container delete \
-          --yes \
-          --resource-group "$(RESOURCE_GROUP)" \
-          --name "$(PROD_CONTAINER)" || true
+    strategy:
+      runOnce:
+        deploy:
+          steps:
 
-        az container create \
-          --resource-group "$(RESOURCE_GROUP)" \
-          --name "$(PROD_CONTAINER)" \
-          --image "$(ACR_NAME).azurecr.io/$(IMAGE_NAME):$(Build.BuildId)" \
-          --registry-login-server "$(ACR_NAME).azurecr.io" \
-          --registry-username "$(ACR_USERNAME)" \
-          --registry-password "$(ACR_PASSWORD)" \
-          --os-type Linux \
-          --cpu 1 \
-          --memory 1.5 \
-          --ports 8080 \
-          --ip-address Public \
-          --restart-policy Always
+          # ------------------------------
+          # Rollback point: save current image
+          # ------------------------------
+          - script: |
+              echo "Fetching CURRENT PROD image for rollback..."
+              CURRENT_IMAGE=$(az container show \
+                --resource-group "$(RESOURCE_GROUP)" \
+                --name "$(PROD_CONTAINER)" \
+                --query "containers[0].image" -o tsv)
 
-        echo "PROD Deployment complete."
-      displayName: "Deploy to PROD ACI"
+              echo "##vso[task.setvariable variable=ROLLBACK_IMAGE]$CURRENT_IMAGE"
+              echo "Rollback Image Saved: $CURRENT_IMAGE"
+            displayName: "Save Rollback Image"
+
+          # ------------------------------
+          # Delete old container
+          # ------------------------------
+          - script: |
+              echo "=== Deleting Existing PROD Container ==="
+              az container delete \
+                --resource-group "$(RESOURCE_GROUP)" \
+                --name "$(PROD_CONTAINER)" \
+                --yes
+            displayName: "Delete Old PROD Container"
+
+          # ------------------------------
+          # Create new PROD container
+          # ------------------------------
+          - script: |
+              echo "=== Deploying NEW PROD Container ==="
+
+              az container create \
+                --resource-group "$(RESOURCE_GROUP)" \
+                --name "$(PROD_CONTAINER)" \
+                --image "$(ACR_NAME).azurecr.io/$(IMAGE_NAME):$(Build.BuildId)" \
+                --registry-login-server "$(ACR_NAME).azurecr.io" \
+                --registry-username "$(ACR_USERNAME)" \
+                --registry-password "$(ACR_PASSWORD)" \
+                --restart-policy Always \
+                --os-type Linux \
+                --cpu 1 \
+                --memory 1.5 \
+                --ports 8080 \
+                --ip-address Public
+
+              PROD_IP=$(az container show \
+                        --resource-group "$(RESOURCE_GROUP)" \
+                        --name "$(PROD_CONTAINER)" \
+                        --query "ipAddress.ip" -o tsv)
+
+              echo "##vso[task.setvariable variable=PROD_URL]http://$PROD_IP:8080"
+              echo "PROD URL = http://$PROD_IP:8080"
+            displayName: "Create PROD Container"
+
+          # ------------------------------
+          # Rollback script
+          # ------------------------------
+          - script: |
+              echo "Rollback script ready."
+              echo "If needed, run:"
+              echo "az container create --resource-group $(RESOURCE_GROUP) --name $(PROD_CONTAINER) --image $(ROLLBACK_IMAGE)"
+            displayName: "Rollback Info"
+
+          # ------------------------------
+          # Notify PROD deploy success
+          # ------------------------------
+          - script: |
+              echo "PROD deployment completed successfully: $(PROD_URL)"
+            displayName: "Post Deployment Notification"
